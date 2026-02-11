@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
-import { loadState, saveState, getToday, getLevelForXP, getSprintContext } from "@/lib/store";
+import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateStreaks } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
 import { startEscalation, resolveEscalation, resolveAllEscalations } from "@/lib/notifications";
@@ -351,52 +351,22 @@ export default function CheckinPage() {
   function handleSubmit() {
     // Calculate XP
     let xp = 0;
-    const streakUpdates: SubmissionResult["streakUpdates"] = [];
 
     // Load current state for streak calculations
     const state = loadState();
     const today = getToday();
 
-    // Binary habits XP + streak updates
-    // In intense/critical, process both prompted AND extra habits that were answered
+    // ─── 1. Calculate XP from binary habits ─────────────────
     const allAnsweredBinary = [...binaryHabits, ...extraBinaryHabits];
-    const todayLogForStreaks = state.logs.find((l) => l.date === today);
+    const todayLogBefore = state.logs.find((l) => l.date === today);
     for (const habit of allAnsweredBinary) {
       const entry = entries.get(habit.id);
-      if (!entry?.status) continue; // skip unanswered extras
+      if (!entry?.status) continue;
       if (entry.status === "done") {
-        if (habit.is_bare_minimum) {
+        // Only award XP if not already "done" today (prevents double XP on re-submit)
+        const alreadyDone = todayLogBefore?.entries[habit.id]?.status === "done";
+        if (!alreadyDone && habit.is_bare_minimum) {
           xp += XP_VALUES.BARE_MINIMUM_HABIT;
-        }
-        // Only increment streak if this habit wasn't already "done" today
-        // (prevents double-counting when submitting multiple stacks or re-submitting)
-        const alreadyDoneToday = todayLogForStreaks?.entries[habit.id]?.status === "done";
-        if (!alreadyDoneToday) {
-          const prevStreak = state.streaks[habit.slug] ?? 0;
-          const newStreak = prevStreak + 1;
-          state.streaks[habit.slug] = newStreak;
-          streakUpdates.push({
-            name: habit.name,
-            icon: habit.icon || "",
-            days: newStreak,
-          });
-
-          // Streak milestone XP
-          if ([7, 14, 30, 60, 90].includes(newStreak)) {
-            xp += XP_VALUES.STREAK_MILESTONE;
-          }
-        } else {
-          // Already counted today — show current streak without incrementing
-          streakUpdates.push({
-            name: habit.name,
-            icon: habit.icon || "",
-            days: state.streaks[habit.slug] ?? 1,
-          });
-        }
-      } else if (entry.status === "missed") {
-        // Critical mode: protect streaks — don't reset on miss
-        if (!sprint.protectStreaks) {
-          state.streaks[habit.slug] = 0;
         }
       }
     }
@@ -437,7 +407,6 @@ export default function CheckinPage() {
 
     const bareMinDone = stackBareMinDone && prevBareMinMet;
     if (bareMinDone) {
-      // Only award bare minimum bonus once per day
       const existingLogForBareMin = state.logs.find((l) => l.date === today);
       if (!existingLogForBareMin?.bareMinimumMet) {
         xp += XP_VALUES.ALL_BARE_MINIMUM;
@@ -445,13 +414,13 @@ export default function CheckinPage() {
       }
     }
 
-    // Perfect day check (simplified — all done in this stack + no bad)
+    // Perfect day check
     const allDone = binaryHabits.every((h) => entries.get(h.id)?.status === "done");
     if (allDone && !anyBadOccurred && bareMinDone) {
       xp += XP_VALUES.PERFECT_DAY;
     }
 
-    // Persist to local store
+    // ─── 2. Save log entries FIRST ──────────────────────────
     const entryRecord: DayLog["entries"] = {};
     entries.forEach((e, id) => {
       entryRecord[id] = { status: e.status ?? "later", value: e.value };
@@ -478,6 +447,31 @@ export default function CheckinPage() {
         bareMinimumMet: bareMinDone,
         submittedAt: new Date().toISOString(),
       });
+    }
+
+    // ─── 3. Recalculate ALL streaks from log history ────────
+    // This is the source of truth — counts consecutive days with "done"
+    // working backwards from today. No matter how many times you submit
+    // on the same day, the streak count stays correct.
+    const allHabits = getResolvedHabits();
+    const habitSlugsById: Record<string, string> = {};
+    for (const h of allHabits) {
+      habitSlugsById[h.id] = h.slug;
+    }
+    const calculatedStreaks = recalculateStreaks(state, habitSlugsById);
+    state.streaks = calculatedStreaks;
+
+    // Build streak updates for the result screen
+    const streakUpdates: SubmissionResult["streakUpdates"] = [];
+    for (const habit of allAnsweredBinary) {
+      const entry = entries.get(habit.id);
+      if (entry?.status === "done") {
+        streakUpdates.push({
+          name: habit.name,
+          icon: habit.icon || "",
+          days: calculatedStreaks[habit.slug] ?? 0,
+        });
+      }
     }
 
     state.totalXp += xp;

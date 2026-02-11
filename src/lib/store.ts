@@ -121,6 +121,90 @@ export function getTodayLog(state: LocalState): DayLog | undefined {
   return state.logs.find((l) => l.date === getToday());
 }
 
+/**
+ * Recalculate all streaks from log history.
+ * Counts consecutive days ending at today (or yesterday if today not logged yet)
+ * where each habit was marked "done". This is the source of truth — never
+ * relies on the stored streak counter which can drift from double-submissions.
+ */
+export function recalculateStreaks(state: LocalState, habitSlugsById: Record<string, string>): Record<string, number> {
+  const today = getToday();
+  const streaks: Record<string, number> = {};
+
+  // Get all unique habit IDs that have ever been logged
+  const allHabitIds = new Set<string>();
+  for (const log of state.logs) {
+    for (const id of Object.keys(log.entries)) {
+      allHabitIds.add(id);
+    }
+  }
+
+  // Sort logs by date descending
+  const sortedDates = state.logs
+    .map((l) => l.date)
+    .sort((a, b) => b.localeCompare(a));
+  const uniqueDates = [...new Set(sortedDates)];
+
+  // For each habit, count consecutive days with "done" working backwards from today
+  for (const habitId of allHabitIds) {
+    const slug = habitSlugsById[habitId];
+    if (!slug) continue;
+
+    let streak = 0;
+    let expectedDate = today;
+
+    for (const date of uniqueDates) {
+      // Skip future dates
+      if (date > today) continue;
+
+      // If this date is what we expect (consecutive day)
+      if (date === expectedDate) {
+        const log = state.logs.find((l) => l.date === date);
+        if (log?.entries[habitId]?.status === "done") {
+          streak++;
+          // Calculate the previous day
+          const d = new Date(date + "T12:00:00");
+          d.setDate(d.getDate() - 1);
+          expectedDate = d.toISOString().slice(0, 10);
+        } else {
+          break; // Chain broken
+        }
+      } else if (date < expectedDate) {
+        // We skipped a day — streak is broken
+        break;
+      }
+    }
+
+    // If today isn't logged yet, try starting from yesterday
+    if (streak === 0 && !state.logs.find((l) => l.date === today)?.entries[habitId]) {
+      const yesterday = new Date(today + "T12:00:00");
+      yesterday.setDate(yesterday.getDate() - 1);
+      let expectedDateAlt = yesterday.toISOString().slice(0, 10);
+
+      for (const date of uniqueDates) {
+        if (date > yesterday.toISOString().slice(0, 10)) continue;
+        if (date === expectedDateAlt) {
+          const log = state.logs.find((l) => l.date === date);
+          if (log?.entries[habitId]?.status === "done") {
+            streak++;
+            const d = new Date(date + "T12:00:00");
+            d.setDate(d.getDate() - 1);
+            expectedDateAlt = d.toISOString().slice(0, 10);
+          } else {
+            break;
+          }
+        } else if (date < expectedDateAlt) {
+          break;
+        }
+      }
+    }
+
+    streaks[slug] = streak;
+  }
+
+  return streaks;
+}
+
 export function getLevelForXP(xp: number): { level: number; title: string; xpRequired: number; nextXp: number } {
   const levels = [
     { level: 1,  title: "Beginner",          xpRequired: 0 },

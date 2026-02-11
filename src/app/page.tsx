@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState, getTodayLog, getLevelForXP, loadSettings } from "@/lib/store";
+import { loadState, getTodayLog, getLevelForXP, loadSettings, recalculateStreaks, saveState } from "@/lib/store";
 import type { LocalState } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
@@ -17,7 +17,16 @@ export default function Home() {
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
 
   useEffect(() => {
-    setState(loadState());
+    // Load state and recalculate streaks from log history (source of truth)
+    const loaded = loadState();
+    const allHabits = getResolvedHabits();
+    const habitSlugsById: Record<string, string> = {};
+    for (const h of allHabits) {
+      habitSlugsById[h.id] = h.slug;
+    }
+    loaded.streaks = recalculateStreaks(loaded, habitSlugsById);
+    saveState(loaded);
+    setState(loaded);
     setWeakHabits(getWeakHabits());
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings, saveSettings, saveState, loadState, DEFAULT_NOTIFICATION_SLOTS } from "@/lib/store";
+import { loadSettings, saveSettings, saveState, loadState, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks } from "@/lib/store";
 import type { UserSettings, HabitOverride, LocalState, NotificationSlot } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
@@ -838,8 +838,31 @@ function NotificationScheduleEditor() {
 // ─── Reset Buttons ──────────────────────────────────────
 function ResetDataButton() {
   const [streakResetDone, setStreakResetDone] = useState(false);
+  const [recalcDone, setRecalcDone] = useState(false);
+  const [recalcMessage, setRecalcMessage] = useState("");
   const [fullResetStep, setFullResetStep] = useState(0);
   const [fullResetDone, setFullResetDone] = useState(false);
+
+  function handleRecalculateStreaks() {
+    const state = loadState();
+    const allHabits = getResolvedHabits();
+    const habitSlugsById: Record<string, string> = {};
+    for (const h of allHabits) {
+      habitSlugsById[h.id] = h.slug;
+    }
+    const calculatedStreaks = recalculateStreaks(state, habitSlugsById);
+    state.streaks = calculatedStreaks;
+    saveState(state);
+
+    const nonZero = Object.entries(calculatedStreaks).filter(([, v]) => v > 0);
+    setRecalcMessage(
+      nonZero.length > 0
+        ? `✓ Recalculated — ${nonZero.map(([k, v]) => `${k}: ${v}d`).join(", ")}`
+        : "✓ Recalculated — all streaks start fresh"
+    );
+    setRecalcDone(true);
+    setTimeout(() => setRecalcDone(false), 5000);
+  }
 
   function handleStreakReset() {
     const state = loadState();
@@ -881,6 +904,21 @@ function ResetDataButton() {
 
   return (
     <div className="space-y-2">
+      {/* Recalculate streaks from log history — fixes incorrect counts */}
+      <button
+        onClick={handleRecalculateStreaks}
+        className={`w-full rounded-xl border py-3 text-sm transition-colors ${
+          recalcDone
+            ? "border-done/30 bg-done/10 text-done font-medium"
+            : "border-brand/30 text-brand hover:bg-brand/10 hover:border-brand/50"
+        }`}
+      >
+        {recalcDone ? recalcMessage : "🔄 Recalculate Streaks from History"}
+      </button>
+      <p className="text-[10px] text-neutral-600 text-center -mt-1">
+        Fixes incorrect streak counts by scanning your log history
+      </p>
+
       {/* Streak reset — keeps XP, logs, gym data */}
       <button
         onClick={handleStreakReset}
