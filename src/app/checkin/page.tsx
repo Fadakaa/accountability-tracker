@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES } from "@/lib/habits";
+import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
 import { loadState, saveState, getToday, getLevelForXP, getSprintContext } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
@@ -68,10 +68,73 @@ export default function CheckinPage() {
   // Sprint context — affects which habits are shown and how
   const sprint = useMemo(() => getSprintContext(), []);
 
+  // Lock screen state — shows when a stack is already submitted
+  const [stackAlreadyDone, setStackAlreadyDone] = useState(false);
+  const [lockSummary, setLockSummary] = useState<{ done: number; missed: number; later: number; cleanBad: number; slippedBad: number }>({ done: 0, missed: 0, later: 0, cleanBad: 0, slippedBad: 0 });
+  const [allStacksDone, setAllStacksDone] = useState(false);
+
   useEffect(() => {
     const state = loadState();
     setStreaks(state.streaks);
-  }, []);
+
+    // Check if current stack is already submitted
+    checkStackLock(activeStack, state);
+  }, [activeStack]);
+
+  function checkStackLock(stack: HabitStack, state?: ReturnType<typeof loadState>) {
+    const s = state ?? loadState();
+    const today = getToday();
+    const todayLog = s.logs.find((l) => l.date === today);
+    if (!todayLog) {
+      setStackAlreadyDone(false);
+      return;
+    }
+
+    const stackBinary = getResolvedHabitsByChainOrder(stack).filter((h) => h.category === "binary" && h.is_active);
+    const stackBad = getResolvedHabitsByChainOrder(stack).filter((h) => h.category === "bad" && h.is_active);
+
+    // Check if every binary has a status and every bad has an occurred value
+    const allBinaryAnswered = stackBinary.length > 0 && stackBinary.every((h) => {
+      const entry = todayLog.entries[h.id];
+      return entry && (entry.status === "done" || entry.status === "missed" || entry.status === "later");
+    });
+    const allBadAnswered = stackBad.length === 0 || stackBad.every((h) => {
+      const entry = todayLog.badEntries[h.id];
+      return entry && (entry.occurred === true || entry.occurred === false);
+    });
+
+    if (allBinaryAnswered && allBadAnswered) {
+      // Build summary
+      let done = 0, missed = 0, later = 0, cleanBad = 0, slippedBad = 0;
+      for (const h of stackBinary) {
+        const s = todayLog.entries[h.id]?.status;
+        if (s === "done") done++;
+        else if (s === "missed") missed++;
+        else if (s === "later") later++;
+      }
+      for (const h of stackBad) {
+        const e = todayLog.badEntries[h.id];
+        if (e?.occurred === false) cleanBad++;
+        else if (e?.occurred === true) slippedBad++;
+      }
+      setLockSummary({ done, missed, later, cleanBad, slippedBad });
+      setStackAlreadyDone(true);
+
+      // Check if ALL stacks are done
+      const allStacks: HabitStack[] = ["morning", "midday", "evening"];
+      const allDone = allStacks.every((st) => {
+        const stBinary = getResolvedHabitsByChainOrder(st).filter((h) => h.category === "binary" && h.is_active);
+        if (stBinary.length === 0) return true;
+        return stBinary.every((h) => {
+          const entry = todayLog.entries[h.id];
+          return entry && (entry.status === "done" || entry.status === "missed" || entry.status === "later");
+        });
+      });
+      setAllStacksDone(allDone);
+    } else {
+      setStackAlreadyDone(false);
+    }
+  }
 
   const stacks: HabitStack[] = ["morning", "midday", "evening"];
 
@@ -387,6 +450,102 @@ export default function CheckinPage() {
             className="rounded-xl bg-brand hover:bg-brand-dark px-6 py-3 text-sm font-bold text-white transition-colors"
           >
             📊 Log More
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Lock Screen (stack already submitted) ─────────────────
+  if (phase === "checkin" && stackAlreadyDone) {
+    const stackLabel = activeStack === "morning" ? "Morning" : activeStack === "midday" ? "Afternoon" : "Evening";
+    const nextStack: HabitStack | null = activeStack === "morning" ? "midday" : activeStack === "midday" ? "evening" : null;
+    const quote = getQuoteOfTheDay();
+
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
+        {/* Status */}
+        <div className="text-4xl mb-3">
+          {allStacksDone ? "🏆" : "✅"}
+        </div>
+        <h1 className="text-xl font-bold mb-1">
+          {allStacksDone ? "Day Complete" : `${stackLabel} Logged`}
+        </h1>
+        <p className="text-sm text-neutral-400 mb-6">
+          {allStacksDone
+            ? "All stacks submitted. Rest well."
+            : `Your ${stackLabel.toLowerCase()} check-in is done.`}
+        </p>
+
+        {/* Quote */}
+        <div className="max-w-xs text-neutral-400 text-sm italic leading-relaxed mb-6">
+          &ldquo;{quote.text}&rdquo;
+        </div>
+
+        {/* Summary Card */}
+        <div className="w-full max-w-sm rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+          <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+            Summary
+          </h2>
+          <div className="grid grid-cols-3 gap-2 text-center mb-3">
+            <div className="rounded-lg bg-done/10 p-2">
+              <div className="text-lg font-bold text-done">{lockSummary.done}</div>
+              <div className="text-[10px] text-neutral-500">Done</div>
+            </div>
+            <div className="rounded-lg bg-missed/10 p-2">
+              <div className="text-lg font-bold text-missed">{lockSummary.missed}</div>
+              <div className="text-[10px] text-neutral-500">Missed</div>
+            </div>
+            <div className="rounded-lg bg-later/10 p-2">
+              <div className="text-lg font-bold text-later">{lockSummary.later}</div>
+              <div className="text-[10px] text-neutral-500">Later</div>
+            </div>
+          </div>
+          {(lockSummary.cleanBad > 0 || lockSummary.slippedBad > 0) && (
+            <div className="flex gap-2 text-center">
+              <div className="flex-1 rounded-lg bg-done/10 p-2">
+                <div className="text-sm font-bold text-done">{lockSummary.cleanBad} clean</div>
+              </div>
+              <div className="flex-1 rounded-lg bg-bad/10 p-2">
+                <div className="text-sm font-bold text-bad">{lockSummary.slippedBad} slipped</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="w-full max-w-sm space-y-2">
+          <a
+            href={`/edit-log`}
+            className="block w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm font-medium text-neutral-300 text-center hover:bg-surface-700 transition-colors"
+          >
+            {"📝"} Edit Today&apos;s Answers
+          </a>
+
+          {nextStack && (
+            <button
+              onClick={() => {
+                setActiveStack(nextStack);
+                setStackAlreadyDone(false);
+              }}
+              className="w-full rounded-xl bg-brand hover:bg-brand-dark text-white py-3 text-sm font-bold transition-colors active:scale-[0.98]"
+            >
+              {nextStack === "midday" ? "☀️ Move to Afternoon" : "🌙 Move to Evening"}
+            </button>
+          )}
+
+          <a
+            href="/"
+            className="block w-full rounded-xl bg-surface-800 py-3 text-sm font-medium text-neutral-400 text-center hover:bg-surface-700 transition-colors"
+          >
+            {"🏠"} Dashboard
+          </a>
+
+          <button
+            onClick={() => setStackAlreadyDone(false)}
+            className="w-full py-2 text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
+          >
+            Override — log again
           </button>
         </div>
       </div>

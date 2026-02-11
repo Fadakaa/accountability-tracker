@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { loadState, loadGymSessions, getLevelForXP } from "@/lib/store";
 import type { LocalState, GymSessionLocal } from "@/lib/store";
-import { getResolvedHabits } from "@/lib/resolvedHabits";
+import { getHabitsWithHistory } from "@/lib/resolvedHabits";
 import {
   getCompletionByDay,
   getWeeklyGameData,
@@ -49,7 +49,7 @@ export default function InsightsPage() {
   useEffect(() => {
     setState(loadState());
     setGymSessions(loadGymSessions());
-    setHabits(getResolvedHabits());
+    setHabits(getHabitsWithHistory());
   }, []);
 
   const days = daysForRange(range);

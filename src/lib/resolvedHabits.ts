@@ -2,7 +2,7 @@
 // All pages should use getResolvedHabits() instead of HABITS directly
 
 import { HABITS } from "./habits";
-import { loadSettings } from "./store";
+import { loadSettings, loadState } from "./store";
 import type { Habit, HabitStack } from "@/types/database";
 
 export function getResolvedHabits(): Habit[] {
@@ -55,4 +55,25 @@ export function getResolvedHabitsByChainOrder(stack: HabitStack): Habit[] {
   }
 
   return ordered;
+}
+
+/** Returns all active habits PLUS any inactive habits that have historical log data.
+ *  Use this in analytics/insights pages so deactivated habits still appear in charts. */
+export function getHabitsWithHistory(): Habit[] {
+  const resolved = getResolvedHabits();
+  const active = resolved.filter((h) => h.is_active);
+  const inactive = resolved.filter((h) => !h.is_active);
+
+  if (inactive.length === 0) return active;
+
+  // Scan logs for any inactive habit IDs
+  const state = loadState();
+  const loggedIds = new Set<string>();
+  for (const log of state.logs) {
+    for (const id of Object.keys(log.entries)) loggedIds.add(id);
+    for (const id of Object.keys(log.badEntries)) loggedIds.add(id);
+  }
+
+  const inactiveWithHistory = inactive.filter((h) => loggedIds.has(h.id));
+  return [...active, ...inactiveWithHistory];
 }
