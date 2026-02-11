@@ -45,14 +45,19 @@ export default function Home() {
   // Dynamic habit lists from resolved habits (respects user settings)
   const resolvedHabits = getResolvedHabits();
   const bareMinHabits = resolvedHabits.filter((h) => h.is_bare_minimum && h.is_active);
+  const stretchHabits = resolvedHabits.filter((h) => h.category === "binary" && !h.is_bare_minimum && h.is_active);
   const measuredHabits = resolvedHabits.filter((h) => h.category === "measured" && h.is_active);
   const badHabits = resolvedHabits.filter((h) => h.category === "bad" && h.is_active);
 
   let bareMinDone = 0;
+  let stretchDone = 0;
   let measuredDone = 0;
   if (todayLog) {
     for (const h of bareMinHabits) {
       if (todayLog.entries[h.id]?.status === "done") bareMinDone++;
+    }
+    for (const h of stretchHabits) {
+      if (todayLog.entries[h.id]?.status === "done") stretchDone++;
     }
     for (const h of measuredHabits) {
       if (todayLog.entries[h.id]?.value && todayLog.entries[h.id].value! > 0) measuredDone++;
@@ -183,7 +188,7 @@ export default function Home() {
       <section className="flex justify-center gap-6 mb-8">
         <ProgressRing label="Non-negotiables" done={bareMinDone} total={bareMinHabits.length} color="#22c55e" />
         <ProgressRing label="Measured" done={measuredDone} total={measuredHabits.length} color="#3b82f6" />
-        <ProgressRing label="Stretch" done={0} total={3} color="#eab308" />
+        <ProgressRing label="Stretch" done={stretchDone} total={stretchHabits.length} color="#eab308" />
       </section>
 
       {/* Top Streaks — Dynamic */}
