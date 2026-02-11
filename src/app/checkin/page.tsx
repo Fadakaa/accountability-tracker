@@ -360,6 +360,7 @@ export default function CheckinPage() {
     // Binary habits XP + streak updates
     // In intense/critical, process both prompted AND extra habits that were answered
     const allAnsweredBinary = [...binaryHabits, ...extraBinaryHabits];
+    const todayLogForStreaks = state.logs.find((l) => l.date === today);
     for (const habit of allAnsweredBinary) {
       const entry = entries.get(habit.id);
       if (!entry?.status) continue; // skip unanswered extras
@@ -367,19 +368,30 @@ export default function CheckinPage() {
         if (habit.is_bare_minimum) {
           xp += XP_VALUES.BARE_MINIMUM_HABIT;
         }
-        // Update streak
-        const prevStreak = state.streaks[habit.slug] ?? 0;
-        const newStreak = prevStreak + 1;
-        state.streaks[habit.slug] = newStreak;
-        streakUpdates.push({
-          name: habit.name,
-          icon: habit.icon || "",
-          days: newStreak,
-        });
+        // Only increment streak if this habit wasn't already "done" today
+        // (prevents double-counting when submitting multiple stacks or re-submitting)
+        const alreadyDoneToday = todayLogForStreaks?.entries[habit.id]?.status === "done";
+        if (!alreadyDoneToday) {
+          const prevStreak = state.streaks[habit.slug] ?? 0;
+          const newStreak = prevStreak + 1;
+          state.streaks[habit.slug] = newStreak;
+          streakUpdates.push({
+            name: habit.name,
+            icon: habit.icon || "",
+            days: newStreak,
+          });
 
-        // Streak milestone XP
-        if ([7, 14, 30, 60, 90].includes(newStreak)) {
-          xp += XP_VALUES.STREAK_MILESTONE;
+          // Streak milestone XP
+          if ([7, 14, 30, 60, 90].includes(newStreak)) {
+            xp += XP_VALUES.STREAK_MILESTONE;
+          }
+        } else {
+          // Already counted today — show current streak without incrementing
+          streakUpdates.push({
+            name: habit.name,
+            icon: habit.icon || "",
+            days: state.streaks[habit.slug] ?? 1,
+          });
         }
       } else if (entry.status === "missed") {
         // Critical mode: protect streaks — don't reset on miss

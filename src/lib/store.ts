@@ -250,6 +250,24 @@ export interface ChainItem {
   icon?: string;
 }
 
+export interface NotificationSlot {
+  id: string;
+  ukHour: number;
+  ukMinute: number;
+  label: string;
+  icon: string;
+  enabled: boolean;
+}
+
+export const DEFAULT_NOTIFICATION_SLOTS: NotificationSlot[] = [
+  { id: "morning", ukHour: 7, ukMinute: 0, label: "Morning", icon: "🌅", enabled: true },
+  { id: "mid-morning", ukHour: 10, ukMinute: 0, label: "Mid-morning", icon: "☕", enabled: true },
+  { id: "midday", ukHour: 13, ukMinute: 0, label: "Afternoon", icon: "☀️", enabled: true },
+  { id: "mid-afternoon", ukHour: 15, ukMinute: 0, label: "Mid-afternoon", icon: "🎯", enabled: true },
+  { id: "early-evening", ukHour: 18, ukMinute: 0, label: "Early evening", icon: "💪", enabled: true },
+  { id: "evening", ukHour: 21, ukMinute: 0, label: "Evening", icon: "🌙", enabled: true },
+];
+
 export interface UserSettings {
   habitOverrides: Record<string, HabitOverride>;
   levelUpStates: Record<string, LevelUpState>;
@@ -258,6 +276,7 @@ export interface UserSettings {
     midday: string;
     evening: string;
   };
+  notificationSlots: NotificationSlot[];
   customQuotes: { id: string; text: string; category: string; isDefault: false }[];
   hiddenQuoteIds: string[];
   routineChains: Record<HabitStack, ChainItem[]>;
@@ -271,6 +290,7 @@ const DEFAULT_SETTINGS: UserSettings = {
     midday: "13:00",
     evening: "21:00",
   },
+  notificationSlots: DEFAULT_NOTIFICATION_SLOTS,
   customQuotes: [],
   hiddenQuoteIds: [],
   routineChains: {

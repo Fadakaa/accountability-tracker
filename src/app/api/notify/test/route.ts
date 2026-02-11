@@ -15,21 +15,15 @@ export async function POST() {
     const response = await fetch("https://ntfy.sh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // No `actions` array — iOS ntfy app doesn't support action buttons.
+      // `click` opens the URL when the notification body is tapped.
       body: JSON.stringify({
         topic: NTFY_TOPIC,
         title: "✅ Test notification",
-        message: "Notifications are working! You'll get check-in reminders at 7 AM, 10 AM, 1 PM, 3 PM, 6 PM, and 9 PM.",
+        message: `Notifications are working! You'll get check-in reminders at 7 AM, 10 AM, 1 PM, 3 PM, 6 PM, and 9 PM.\n\n👉 Tap to open check-in`,
         tags: ["white_check_mark", "bell"],
         priority: 4,
         click: `${APP_URL}/checkin`,
-        actions: [
-          {
-            action: "view",
-            label: "Open Check-in",
-            url: `${APP_URL}/checkin`,
-            clear: true,
-          },
-        ],
       }),
     });
 

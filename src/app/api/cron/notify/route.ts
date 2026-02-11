@@ -109,21 +109,15 @@ export async function GET(request: Request) {
     }
 
     try {
+      // No `actions` array — iOS ntfy app doesn't support action buttons.
+      // `click` opens the URL when the notification body is tapped.
       const body: Record<string, unknown> = {
         topic: NTFY_TOPIC,
         title: notif.title,
-        message: notif.body,
+        message: `${notif.body}\n\n👉 Tap to check in`,
         tags: notif.tags,
         priority: notif.priority,
         click: `${APP_URL}/checkin`,
-        actions: [
-          {
-            action: "view",
-            label: "Open Check-in",
-            url: `${APP_URL}/checkin`,
-            clear: true,
-          },
-        ],
       };
 
       // Only add delay if > 0 minutes in the future

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings, saveSettings, saveState, loadState } from "@/lib/store";
-import type { UserSettings, HabitOverride, LocalState } from "@/lib/store";
+import { loadSettings, saveSettings, saveState, loadState, DEFAULT_NOTIFICATION_SLOTS } from "@/lib/store";
+import type { UserSettings, HabitOverride, LocalState, NotificationSlot } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -94,6 +94,7 @@ export default function SettingsPage() {
       habitOverrides: {},
       levelUpStates: settings?.levelUpStates ?? {},
       checkinTimes: { morning: "07:00", midday: "13:00", evening: "21:00" },
+      notificationSlots: DEFAULT_NOTIFICATION_SLOTS,
       customQuotes: [],
       hiddenQuoteIds: [],
       routineChains: { morning: [], midday: [], evening: [] },
@@ -601,30 +602,8 @@ function NotificationSection() {
           </ol>
         </div>
 
-        {/* Schedule */}
-        <div className="rounded-lg bg-surface-700/50 p-3">
-          <h3 className="text-xs font-bold text-neutral-300 mb-2">Daily Schedule (6 check-ins):</h3>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>🌅</span> <span>7:00 AM — Morning</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>☕</span> <span>10:00 AM — Mid-morning</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>☀️</span> <span>1:00 PM — Afternoon</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>🎯</span> <span>3:00 PM — Mid-afternoon</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>💪</span> <span>6:00 PM — Early evening</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>🌙</span> <span>9:00 PM — Evening</span>
-            </div>
-          </div>
-        </div>
+        {/* Editable Schedule */}
+        <NotificationScheduleEditor />
 
         {/* Fibonacci Escalation Info */}
         <div className="rounded-lg bg-surface-700/50 p-3">
@@ -669,6 +648,190 @@ function NotificationSection() {
         )}
       </div>
     </section>
+  );
+}
+
+// ─── Notification Schedule Editor ────────────────────────
+function NotificationScheduleEditor() {
+  const [slots, setSlots] = useState<NotificationSlot[]>(() => {
+    const settings = loadSettings();
+    return settings.notificationSlots?.length > 0
+      ? settings.notificationSlots
+      : DEFAULT_NOTIFICATION_SLOTS;
+  });
+  const [editing, setEditing] = useState(false);
+  const [synced, setSynced] = useState(false);
+
+  function formatSlotTime(slot: NotificationSlot): string {
+    const h = slot.ukHour;
+    const m = slot.ukMinute;
+    const period = h >= 12 ? "PM" : "AM";
+    const displayH = h > 12 ? h - 12 : h === 0 ? 12 : h;
+    return `${displayH}:${m.toString().padStart(2, "0")} ${period}`;
+  }
+
+  function updateSlot(id: string, updates: Partial<NotificationSlot>) {
+    setSlots((prev) => {
+      const next = prev.map((s) => (s.id === id ? { ...s, ...updates } : s));
+      const settings = loadSettings();
+      settings.notificationSlots = next;
+      saveSettings(settings);
+      return next;
+    });
+  }
+
+  function addSlot() {
+    const newSlot: NotificationSlot = {
+      id: `custom-${Date.now()}`,
+      ukHour: 12,
+      ukMinute: 0,
+      label: "Custom",
+      icon: "🔔",
+      enabled: true,
+    };
+    setSlots((prev) => {
+      const next = [...prev, newSlot].sort((a, b) => a.ukHour * 60 + a.ukMinute - (b.ukHour * 60 + b.ukMinute));
+      const settings = loadSettings();
+      settings.notificationSlots = next;
+      saveSettings(settings);
+      return next;
+    });
+  }
+
+  function removeSlot(id: string) {
+    setSlots((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      const settings = loadSettings();
+      settings.notificationSlots = next;
+      saveSettings(settings);
+      return next;
+    });
+  }
+
+  function resetToDefault() {
+    setSlots(DEFAULT_NOTIFICATION_SLOTS);
+    const settings = loadSettings();
+    settings.notificationSlots = DEFAULT_NOTIFICATION_SLOTS;
+    saveSettings(settings);
+  }
+
+  async function syncSchedule() {
+    // Call the sync API to update the server-side schedule
+    try {
+      const res = await fetch("/api/notify/sync-schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slots: slots.filter((s) => s.enabled) }),
+      });
+      if (res.ok) {
+        setSynced(true);
+        setTimeout(() => setSynced(false), 3000);
+      }
+    } catch {
+      // Silent fail — schedule will use defaults on next cron
+    }
+  }
+
+  const enabledCount = slots.filter((s) => s.enabled).length;
+
+  return (
+    <div className="rounded-lg bg-surface-700/50 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-bold text-neutral-300">
+          Daily Schedule ({enabledCount} check-in{enabledCount !== 1 ? "s" : ""})
+        </h3>
+        <button
+          onClick={() => setEditing(!editing)}
+          className="text-[10px] text-brand hover:text-brand-dark font-medium"
+        >
+          {editing ? "Done" : "Edit"}
+        </button>
+      </div>
+
+      <div className="space-y-1.5">
+        {slots.map((slot) => (
+          <div
+            key={slot.id}
+            className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors ${
+              slot.enabled ? "text-neutral-300" : "text-neutral-600 opacity-50"
+            }`}
+          >
+            {editing && (
+              <button
+                onClick={() => updateSlot(slot.id, { enabled: !slot.enabled })}
+                className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                  slot.enabled ? "bg-done/20 text-done" : "bg-surface-600 text-neutral-600"
+                }`}
+              >
+                {slot.enabled ? "✓" : ""}
+              </button>
+            )}
+            <span className="w-5 text-center">{slot.icon}</span>
+            {editing ? (
+              <>
+                <input
+                  type="time"
+                  value={`${slot.ukHour.toString().padStart(2, "0")}:${slot.ukMinute.toString().padStart(2, "0")}`}
+                  onChange={(e) => {
+                    const [h, m] = e.target.value.split(":").map(Number);
+                    updateSlot(slot.id, { ukHour: h, ukMinute: m });
+                  }}
+                  className="bg-surface-600 rounded px-2 py-1 text-xs text-white border-none outline-none w-24"
+                />
+                <input
+                  type="text"
+                  value={slot.label}
+                  onChange={(e) => updateSlot(slot.id, { label: e.target.value })}
+                  className="bg-surface-600 rounded px-2 py-1 text-xs text-white border-none outline-none flex-1"
+                  placeholder="Label"
+                />
+                {slot.id.startsWith("custom-") && (
+                  <button
+                    onClick={() => removeSlot(slot.id)}
+                    className="text-missed/60 hover:text-missed text-[10px]"
+                  >
+                    ✕
+                  </button>
+                )}
+              </>
+            ) : (
+              <span>
+                {formatSlotTime(slot)} — {slot.label}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {editing && (
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={addSlot}
+            className="flex-1 rounded-lg bg-surface-600 py-2 text-[10px] font-medium text-neutral-400 hover:text-neutral-200 transition-colors"
+          >
+            + Add Time
+          </button>
+          <button
+            onClick={resetToDefault}
+            className="flex-1 rounded-lg bg-surface-600 py-2 text-[10px] font-medium text-neutral-500 hover:text-neutral-300 transition-colors"
+          >
+            Reset Defaults
+          </button>
+        </div>
+      )}
+
+      {/* Sync button — pushes schedule to server */}
+      <button
+        onClick={syncSchedule}
+        className={`w-full mt-2 rounded-lg py-2 text-[10px] font-medium transition-all ${
+          synced
+            ? "bg-done/20 text-done"
+            : "bg-surface-600 text-neutral-400 hover:text-neutral-200"
+        }`}
+      >
+        {synced ? "✓ Schedule synced" : "🔄 Sync to notifications"}
+      </button>
+    </div>
   );
 }
 

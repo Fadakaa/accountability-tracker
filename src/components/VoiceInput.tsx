@@ -69,7 +69,17 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
   }, []);
 
   if (!supported) {
-    return null; // Hide if speech recognition not available
+    // Show disabled state so user knows the feature exists but isn't available
+    return (
+      <button
+        type="button"
+        disabled
+        className={`rounded-lg opacity-40 cursor-not-allowed ${className}`}
+        title="Voice input not available in this browser — try opening in Chrome or Safari"
+      >
+        🎤 N/A
+      </button>
+    );
   }
 
   return (
