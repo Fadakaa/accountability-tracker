@@ -8,12 +8,7 @@ import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel } from "@/lib/habits";
 import type { Habit, HabitStack } from "@/types/database";
-import {
-  requestNotificationPermission,
-  getNotificationPermission,
-  syncScheduleToServiceWorker,
-  startNotificationScheduler,
-} from "@/lib/notifications";
+import { syncScheduleToServiceWorker } from "@/lib/notifications";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -560,92 +555,97 @@ function QuotesSection({ settings, onUpdate }: { settings: UserSettings; onUpdat
 
 // ─── Notification Settings ──────────────────────────────────
 function NotificationSection() {
-  const [permission, setPermission] = useState<string>("default");
-  const [testSent, setTestSent] = useState(false);
-
-  useEffect(() => {
-    setPermission(getNotificationPermission());
-  }, []);
-
-  async function handleEnable() {
-    const granted = await requestNotificationPermission();
-    setPermission(granted ? "granted" : "denied");
-    if (granted) {
-      startNotificationScheduler();
-      syncScheduleToServiceWorker();
-    }
-  }
+  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState("");
 
   async function sendTestNotification() {
-    if (Notification.permission !== "granted") return;
-    const registration = await navigator.serviceWorker?.ready;
-    if (registration) {
-      await registration.showNotification("Test notification 🔔", {
-        body: "Notifications are working! You'll get check-in reminders at your scheduled times.",
-        icon: "/icons/icon-192.svg",
-        badge: "/icons/icon-192.svg",
-        tag: "test",
-        data: { url: "/settings" },
-      });
-      setTestSent(true);
-      setTimeout(() => setTestSent(false), 3000);
+    setTestStatus("sending");
+    setErrorMsg("");
+    try {
+      const res = await fetch("/api/notify/test", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setTestStatus("sent");
+        setTimeout(() => setTestStatus("idle"), 4000);
+      } else {
+        setTestStatus("error");
+        setErrorMsg(data.error || "Failed to send");
+      }
+    } catch {
+      setTestStatus("error");
+      setErrorMsg("Network error — is the server running?");
     }
   }
 
   return (
     <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
       <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
-        Push Notifications
+        Phone Notifications (ntfy.sh)
       </h2>
 
-      {permission === "granted" ? (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-done text-lg">{"✅"}</span>
-            <span className="text-sm text-neutral-300">Notifications enabled</span>
+      <div className="space-y-4">
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          Real push notifications to your phone — even when the app is closed.
+          Powered by <span className="text-brand font-semibold">ntfy.sh</span> (free, no account needed).
+        </p>
+
+        {/* Setup instructions */}
+        <div className="rounded-lg bg-surface-700/50 p-3 space-y-2">
+          <h3 className="text-xs font-bold text-neutral-300">Setup (one-time):</h3>
+          <ol className="text-xs text-neutral-400 space-y-1.5 list-decimal list-inside">
+            <li>Install the <span className="text-white font-medium">ntfy</span> app on your phone (free on App Store / Play Store)</li>
+            <li>Open the app and tap <span className="text-white font-medium">+ Subscribe</span></li>
+            <li>Enter your private topic name (set in Vercel env vars as <code className="text-brand bg-surface-700 px-1 rounded">NTFY_TOPIC</code>)</li>
+            <li>That&apos;s it — you&apos;ll get notifications at 7 AM, 1 PM, 9 PM, and an 11 PM warning</li>
+          </ol>
+        </div>
+
+        {/* Schedule */}
+        <div className="rounded-lg bg-surface-700/50 p-3">
+          <h3 className="text-xs font-bold text-neutral-300 mb-2">Schedule:</h3>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>🌅</span> <span>7:00 AM — Morning</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>☀️</span> <span>1:00 PM — Midday</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>🌙</span> <span>9:00 PM — Evening</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>⚠️</span> <span>11:00 PM — Warning</span>
+            </div>
           </div>
-          <p className="text-xs text-neutral-500">
-            You&apos;ll receive check-in reminders at your scheduled times,
-            an 11 PM warning if habits are unlogged, and escalating nudges
-            when you hit &quot;Later&quot; on a habit.
-          </p>
-          <button
-            onClick={sendTestNotification}
-            className={`w-full rounded-lg py-2.5 text-sm font-medium transition-all active:scale-[0.98] ${
-              testSent
-                ? "bg-done/20 text-done border border-done/30"
-                : "bg-surface-700 text-neutral-300 hover:text-white"
-            }`}
-          >
-            {testSent ? "✓ Test sent!" : "🔔 Send Test Notification"}
-          </button>
         </div>
-      ) : permission === "denied" ? (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-missed text-lg">{"🔕"}</span>
-            <span className="text-sm text-neutral-400">Notifications blocked</span>
-          </div>
-          <p className="text-xs text-neutral-500">
-            You&apos;ve blocked notifications. To re-enable, go to your
-            browser settings and allow notifications for this site.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <p className="text-xs text-neutral-400">
-            Enable push notifications to get check-in reminders at 7 AM,
-            1 PM, and 9 PM. The system chases you — so you don&apos;t have
-            to chase yourself.
-          </p>
-          <button
-            onClick={handleEnable}
-            className="w-full rounded-lg bg-brand hover:bg-brand-dark text-white text-sm font-bold py-2.5 transition-colors active:scale-[0.98]"
-          >
-            🔔 Enable Push Notifications
-          </button>
-        </div>
-      )}
+
+        {/* Test button */}
+        <button
+          onClick={sendTestNotification}
+          disabled={testStatus === "sending"}
+          className={`w-full rounded-lg py-2.5 text-sm font-medium transition-all active:scale-[0.98] ${
+            testStatus === "sent"
+              ? "bg-done/20 text-done border border-done/30"
+              : testStatus === "error"
+                ? "bg-missed/20 text-missed border border-missed/30"
+                : testStatus === "sending"
+                  ? "bg-surface-700 text-neutral-500"
+                  : "bg-brand hover:bg-brand-dark text-white font-bold"
+          }`}
+        >
+          {testStatus === "sending"
+            ? "Sending..."
+            : testStatus === "sent"
+              ? "✓ Check your phone!"
+              : testStatus === "error"
+                ? "✕ Failed — check setup"
+                : "📱 Send Test Notification"}
+        </button>
+
+        {testStatus === "error" && errorMsg && (
+          <p className="text-xs text-missed/80">{errorMsg}</p>
+        )}
+      </div>
     </section>
   );
 }
