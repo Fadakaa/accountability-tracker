@@ -1,5 +1,5 @@
 // Vercel Cron Job — sends all daily check-in reminders via ntfy.sh
-// Runs once daily at 6 AM UTC (vercel.json). Schedules all 4 notifications
+// Runs once daily at 6 AM UTC (vercel.json). Schedules all 6 notifications
 // using ntfy's built-in "delay" feature so they arrive at the right UK times.
 // Protected by CRON_SECRET to prevent unauthorized calls.
 
@@ -30,6 +30,14 @@ const SCHEDULE: ScheduledNotif[] = [
     priority: 4,
   },
   {
+    slot: "mid-morning",
+    ukHour: 10,
+    title: "Mid-morning check",
+    body: "Morning stack done? If not, what's left? Deep work window is open.",
+    tags: ["coffee", "brain"],
+    priority: 3,
+  },
+  {
     slot: "midday",
     ukHour: 13,
     title: "Afternoon check-in",
@@ -38,20 +46,28 @@ const SCHEDULE: ScheduledNotif[] = [
     priority: 3,
   },
   {
+    slot: "mid-afternoon",
+    ukHour: 15,
+    title: "Afternoon push",
+    body: "3 PM — energy dip is normal. Push through. What's still on the list?",
+    tags: ["fire", "dart"],
+    priority: 3,
+  },
+  {
+    slot: "early-evening",
+    ukHour: 18,
+    title: "Evening prep",
+    body: "6 PM — training time? Get moving. The evening stack is waiting.",
+    tags: ["weight_lifting", "running_shirt_with_sash"],
+    priority: 4,
+  },
+  {
     slot: "evening",
     ukHour: 21,
     title: "Evening wrap-up",
     body: "End of day — log your training, reading, and close out strong.",
     tags: ["crescent_moon", "writing_hand"],
     priority: 4,
-  },
-  {
-    slot: "warning",
-    ukHour: 23,
-    title: "Day isn't logged yet",
-    body: "It's 11 PM. Habits still unlogged. Don't let the day slip — go log now.",
-    tags: ["warning", "hourglass_flowing_sand"],
-    priority: 5,
   },
 ];
 
@@ -83,7 +99,7 @@ export async function GET(request: Request) {
 
   for (const notif of SCHEDULE) {
     // Calculate delay in minutes from now to target UK hour
-    let delayMinutes =
+    const delayMinutes =
       (notif.ukHour - currentHour) * 60 - currentMinute;
 
     // If target time already passed today, skip it

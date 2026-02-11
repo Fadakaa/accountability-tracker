@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings, saveSettings } from "@/lib/store";
-import type { UserSettings, HabitOverride } from "@/lib/store";
+import { loadSettings, saveSettings, saveState } from "@/lib/store";
+import type { UserSettings, HabitOverride, LocalState } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -223,13 +223,14 @@ export default function SettingsPage() {
       <QuotesSection settings={settings} onUpdate={(newSettings) => { setSettings(newSettings); saveSettings(newSettings); }} />
 
       {/* Reset */}
-      <section className="mb-6">
+      <section className="mb-6 space-y-2">
         <button
           onClick={resetToDefaults}
           className="w-full rounded-xl border border-surface-700 py-3 text-sm text-neutral-500 hover:text-neutral-300 hover:border-neutral-600 transition-colors"
         >
           Reset All Settings to Default
         </button>
+        <ResetDataButton />
       </section>
 
       {/* Back */}
@@ -595,28 +596,48 @@ function NotificationSection() {
           <ol className="text-xs text-neutral-400 space-y-1.5 list-decimal list-inside">
             <li>Install the <span className="text-white font-medium">ntfy</span> app on your phone (free on App Store / Play Store)</li>
             <li>Open the app and tap <span className="text-white font-medium">+ Subscribe</span></li>
-            <li>Enter your private topic name (set in Vercel env vars as <code className="text-brand bg-surface-700 px-1 rounded">NTFY_TOPIC</code>)</li>
-            <li>That&apos;s it — you&apos;ll get notifications at 7 AM, 1 PM, 9 PM, and an 11 PM warning</li>
+            <li>Enter the topic: <code className="text-brand bg-surface-700 px-1.5 py-0.5 rounded font-bold select-all">accountability-mk-662c59e795fd</code></li>
+            <li>That&apos;s it — you&apos;ll get 6 daily check-ins + Fibonacci escalation for &quot;Later&quot; habits</li>
           </ol>
         </div>
 
         {/* Schedule */}
         <div className="rounded-lg bg-surface-700/50 p-3">
-          <h3 className="text-xs font-bold text-neutral-300 mb-2">Schedule:</h3>
+          <h3 className="text-xs font-bold text-neutral-300 mb-2">Daily Schedule (6 check-ins):</h3>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="flex items-center gap-1.5 text-neutral-400">
               <span>🌅</span> <span>7:00 AM — Morning</span>
             </div>
             <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>☀️</span> <span>1:00 PM — Midday</span>
+              <span>☕</span> <span>10:00 AM — Mid-morning</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>☀️</span> <span>1:00 PM — Afternoon</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>🎯</span> <span>3:00 PM — Mid-afternoon</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <span>💪</span> <span>6:00 PM — Early evening</span>
             </div>
             <div className="flex items-center gap-1.5 text-neutral-400">
               <span>🌙</span> <span>9:00 PM — Evening</span>
             </div>
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <span>⚠️</span> <span>11:00 PM — Warning</span>
-            </div>
           </div>
+        </div>
+
+        {/* Fibonacci Escalation Info */}
+        <div className="rounded-lg bg-surface-700/50 p-3">
+          <h3 className="text-xs font-bold text-neutral-300 mb-2">Fibonacci Escalation:</h3>
+          <p className="text-xs text-neutral-400 leading-relaxed">
+            When you tap <span className="text-later font-semibold">Later</span> on a habit, escalating reminders hit your phone:
+          </p>
+          <div className="mt-2 text-[10px] text-neutral-500 font-mono">
+            +13 min → +8 min → +5 min → +3 min → +1 min
+          </div>
+          <p className="text-[10px] text-neutral-500 mt-1">
+            30 minutes of increasingly urgent reminders until you log it
+          </p>
         </div>
 
         {/* Test button */}
@@ -647,5 +668,63 @@ function NotificationSection() {
         )}
       </div>
     </section>
+  );
+}
+
+// ─── Reset All Data ──────────────────────────────────────
+function ResetDataButton() {
+  const [confirmStep, setConfirmStep] = useState(0);
+  const [done, setDone] = useState(false);
+
+  function handleReset() {
+    if (confirmStep === 0) {
+      setConfirmStep(1);
+      return;
+    }
+
+    // Actually reset all data
+    const freshState: LocalState = {
+      totalXp: 0,
+      currentLevel: 1,
+      streaks: {},
+      bareMinimumStreak: 0,
+      logs: [],
+      activeSprint: null,
+      sprintHistory: [],
+    };
+    saveState(freshState);
+
+    // Clear gym sessions
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("accountability-gym");
+      localStorage.removeItem("accountability-notifications");
+    }
+
+    setDone(true);
+    setConfirmStep(0);
+    setTimeout(() => setDone(false), 3000);
+  }
+
+  if (done) {
+    return (
+      <div className="w-full rounded-xl border border-done/30 bg-done/10 py-3 text-sm text-done font-medium text-center">
+        All data reset to zero
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleReset}
+      className={`w-full rounded-xl border py-3 text-sm transition-colors ${
+        confirmStep === 1
+          ? "border-missed/50 bg-missed/10 text-missed font-bold hover:bg-missed/20"
+          : "border-missed/20 text-neutral-600 hover:text-missed hover:border-missed/40"
+      }`}
+    >
+      {confirmStep === 1
+        ? "⚠️ Tap again to confirm — this erases ALL XP, streaks, and logs"
+        : "Reset All Data (XP, Streaks, Logs)"}
+    </button>
   );
 }

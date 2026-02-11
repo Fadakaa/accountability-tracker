@@ -84,6 +84,43 @@ export default function CheckinPage() {
       setDayDismissed(true);
     }
 
+    // Pre-load any partial progress for today
+    const today = getToday();
+    const todayLog = state.logs.find((l) => l.date === today);
+    if (todayLog && phase === "checkin") {
+      const stackHabitIds = new Set(getResolvedHabitsByChainOrder(activeStack).map((h) => h.id));
+
+      // Restore binary/measured entries for this stack
+      const restoredEntries = new Map<string, CheckinEntry>();
+      for (const [habitId, entry] of Object.entries(todayLog.entries)) {
+        if (stackHabitIds.has(habitId) && entry.status) {
+          restoredEntries.set(habitId, {
+            habitId,
+            status: entry.status,
+            value: entry.value,
+          });
+        }
+      }
+      if (restoredEntries.size > 0) {
+        setEntries(restoredEntries);
+      }
+
+      // Restore bad habit entries for this stack
+      const restoredBad = new Map<string, BadHabitEntry>();
+      for (const [habitId, entry] of Object.entries(todayLog.badEntries)) {
+        if (stackHabitIds.has(habitId) && entry.occurred != null) {
+          restoredBad.set(habitId, {
+            habitId,
+            occurred: entry.occurred,
+            durationMinutes: entry.durationMinutes,
+          });
+        }
+      }
+      if (restoredBad.size > 0) {
+        setBadEntries(restoredBad);
+      }
+    }
+
     // Check if current stack is already submitted
     checkStackLock(activeStack, state);
   }, [activeStack]);
@@ -192,10 +229,14 @@ export default function CheckinPage() {
   // Track whether extras section is expanded (intense/critical)
   const [showExtras, setShowExtras] = useState(false);
 
-  // Check if all entries are filled
+  // Check if entries are filled — partial submission now allowed
   const allBinaryAnswered = binaryHabits.every((h) => entries.get(h.id)?.status !== undefined && entries.get(h.id)?.status !== null);
   const allBadAnswered = badHabits.every((h) => badEntries.get(h.id)?.occurred !== undefined && badEntries.get(h.id)?.occurred !== null);
+  const anyAnswered = binaryHabits.some((h) => entries.get(h.id)?.status != null) ||
+    badHabits.some((h) => badEntries.get(h.id)?.occurred != null) ||
+    measuredHabits.some((h) => entries.get(h.id)?.value != null);
   const canSubmit = allBinaryAnswered && allBadAnswered;
+  const canSavePartial = anyAnswered && !canSubmit;
 
   function setEntry(habitId: string, status: LogStatus) {
     setEntries((prev) => {
@@ -210,7 +251,14 @@ export default function CheckinPage() {
     if (!habit) return;
 
     if (status === "later") {
+      // Local escalation (browser-based, for when app is open)
       startEscalation(habitId, habit.name, habit.icon || "");
+      // ntfy escalation (phone push, works even when browser is closed)
+      fetch("/api/notify/escalate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
+      }).catch(() => {}); // fire and forget
     } else {
       // Done or Missed — resolve any active escalation
       resolveEscalation(habitId);
@@ -254,6 +302,50 @@ export default function CheckinPage() {
       });
       return next;
     });
+  }
+
+  // ─── Partial Save (save progress without full submission) ──
+  const [savedPartial, setSavedPartial] = useState(false);
+
+  function handleSavePartial() {
+    const state = loadState();
+    const today = getToday();
+
+    // Build partial entry records
+    const entryRecord: DayLog["entries"] = {};
+    entries.forEach((e, id) => {
+      if (e.status != null) {
+        entryRecord[id] = { status: e.status, value: e.value };
+      } else if (e.value != null) {
+        entryRecord[id] = { status: "done", value: e.value };
+      }
+    });
+    const badRecord: DayLog["badEntries"] = {};
+    badEntries.forEach((e, id) => {
+      if (e.occurred != null) {
+        badRecord[id] = { occurred: e.occurred, durationMinutes: e.durationMinutes };
+      }
+    });
+
+    // Merge with existing today log
+    const existingLog = state.logs.find((l) => l.date === today);
+    if (existingLog) {
+      Object.assign(existingLog.entries, entryRecord);
+      Object.assign(existingLog.badEntries, badRecord);
+    } else {
+      state.logs.push({
+        date: today,
+        entries: entryRecord,
+        badEntries: badRecord,
+        xpEarned: 0,
+        bareMinimumMet: false,
+        submittedAt: new Date().toISOString(),
+      });
+    }
+
+    saveState(state);
+    setSavedPartial(true);
+    setTimeout(() => setSavedPartial(false), 2000);
   }
 
   function handleSubmit() {
@@ -831,8 +923,8 @@ export default function CheckinPage() {
         </div>
       )}
 
-      {/* Submit Button */}
-      <div className="mt-auto pt-4 pb-6">
+      {/* Submit / Save Buttons */}
+      <div className="mt-auto pt-4 pb-6 space-y-2">
         <button
           onClick={handleSubmit}
           disabled={!canSubmit}
@@ -844,9 +936,21 @@ export default function CheckinPage() {
         >
           Submit Check-In →
         </button>
-        {!canSubmit && (
-          <p className="text-center text-xs text-neutral-600 mt-2">
-            Answer all habits to submit
+        {canSavePartial && (
+          <button
+            onClick={handleSavePartial}
+            className={`w-full rounded-xl py-3 text-sm font-medium transition-all active:scale-[0.98] ${
+              savedPartial
+                ? "bg-done/20 text-done border border-done/30"
+                : "bg-surface-800 border border-surface-700 text-neutral-400 hover:text-neutral-200"
+            }`}
+          >
+            {savedPartial ? "✓ Progress Saved" : "💾 Save Progress — finish later"}
+          </button>
+        )}
+        {!canSubmit && !canSavePartial && (
+          <p className="text-center text-xs text-neutral-600 mt-1">
+            Answer habits to submit or save progress
           </p>
         )}
       </div>

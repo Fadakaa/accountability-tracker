@@ -52,9 +52,7 @@ export default function NotificationBanner() {
         </button>
       </div>
       <p className="text-xs text-neutral-400 mb-3">
-        Install the <span className="text-white font-medium">ntfy</span> app
-        and subscribe to your topic to get check-in reminders at 7am, 1pm, 9pm.
-        See Settings for details.
+        Install the <span className="text-white font-medium">ntfy</span> app, subscribe to topic <code className="text-brand font-bold">accountability-mk-662c59e795fd</code> to get 6 daily check-ins + Fibonacci escalation.
       </p>
       <div className="flex gap-2">
         <button
