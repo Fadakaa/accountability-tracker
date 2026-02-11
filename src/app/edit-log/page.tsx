@@ -26,7 +26,22 @@ export default function EditLogPage() {
     const existingLog = s.logs.find((l) => l.date === d);
     if (existingLog) {
       // Deep clone so edits don't mutate state until save
-      setLog(JSON.parse(JSON.stringify(existingLog)));
+      const clonedLog: DayLog = JSON.parse(JSON.stringify(existingLog));
+      // Ensure all active habits have entries so they show up in the editor
+      const allHabits = getResolvedHabits();
+      for (const h of allHabits) {
+        if (!h.is_active) continue;
+        if (h.category === "bad") {
+          if (!clonedLog.badEntries[h.id]) {
+            clonedLog.badEntries[h.id] = { occurred: null as unknown as boolean, durationMinutes: null };
+          }
+        } else {
+          if (!clonedLog.entries[h.id]) {
+            clonedLog.entries[h.id] = { status: "later" as const, value: null };
+          }
+        }
+      }
+      setLog(clonedLog);
     }
   }, []);
 
@@ -48,9 +63,9 @@ export default function EditLogPage() {
     );
   }
 
-  const binaryHabits = habits.filter((h) => h.category === "binary" && log.entries[h.id]);
-  const measuredHabits = habits.filter((h) => h.category === "measured" && log.entries[h.id]);
-  const badHabitsLogged = habits.filter((h) => h.category === "bad" && log.badEntries[h.id]);
+  const binaryHabits = habits.filter((h) => h.category === "binary" && h.is_active);
+  const measuredHabits = habits.filter((h) => h.category === "measured" && h.is_active);
+  const badHabitsLogged = habits.filter((h) => h.category === "bad" && h.is_active);
 
   function updateEntry(habitId: string, field: "status" | "value", val: string | number | null) {
     if (!log) return;

@@ -8,20 +8,34 @@ import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
-import { isDayFullyComplete, isDayPerfect } from "@/lib/dayComplete";
+import { isDayFullyComplete, isDayPerfect, getDayStats } from "@/lib/dayComplete";
 import { startNotificationScheduler, getNotificationPermission } from "@/lib/notifications";
 import NotificationBanner from "@/components/NotificationBanner";
 import LevelSuggestionBanner from "@/components/LevelSuggestionBanner";
+import DayCompleteScreen from "@/components/DayCompleteScreen";
 
 export default function Home() {
   const [state, setState] = useState<LocalState | null>(null);
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
+  const [showDayComplete, setShowDayComplete] = useState(false);
+  const [dayCompleteStats, setDayCompleteStats] = useState<ReturnType<typeof getDayStats> & { bareMinimumStreak: number } | null>(null);
 
   useEffect(() => {
-    setState(loadState());
+    const s = loadState();
+    setState(s);
     setWeakHabits(getWeakHabits());
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();
+    }
+    // Show day complete overlay if all habits are done and not dismissed this session
+    if (isDayFullyComplete(s)) {
+      const dismissed = sessionStorage.getItem("dayCompleteDismissed");
+      const today = new Date().toISOString().slice(0, 10);
+      if (dismissed !== today) {
+        const stats = getDayStats(s);
+        setDayCompleteStats({ ...stats, bareMinimumStreak: s.bareMinimumStreak });
+        setShowDayComplete(true);
+      }
     }
   }, []);
 
@@ -116,6 +130,23 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen px-4 py-6">
+      {/* Day Complete Lock Screen */}
+      {showDayComplete && dayCompleteStats && (
+        <DayCompleteScreen
+          habitsCompleted={dayCompleteStats.habitsCompleted}
+          habitsTotal={dayCompleteStats.habitsTotal}
+          xpEarned={dayCompleteStats.xpEarned}
+          bareMinimumMet={dayCompleteStats.bareMinimumMet}
+          isPerfect={dayCompleteStats.isPerfect}
+          bareMinimumStreak={dayCompleteStats.bareMinimumStreak}
+          onDismiss={() => {
+            setShowDayComplete(false);
+            const today = new Date().toISOString().slice(0, 10);
+            sessionStorage.setItem("dayCompleteDismissed", today);
+          }}
+        />
+      )}
+
       {/* XP Bar + Level + Settings */}
       <header className="mb-6">
         <div className="flex items-center justify-between mb-2">

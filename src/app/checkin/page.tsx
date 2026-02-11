@@ -97,6 +97,42 @@ export default function CheckinPage() {
     return habits;
   }, [activeStack, sprint.singleCheckin]);
 
+  // Pre-fill entries from existing log when revisiting a stack that was already submitted
+  useEffect(() => {
+    const state = loadState();
+    const today = getToday();
+    const existingLog = state.logs.find((l) => l.date === today);
+    if (!existingLog) return;
+
+    const prefilled = new Map<string, CheckinEntry>();
+    const prefilledBad = new Map<string, BadHabitEntry>();
+
+    for (const habit of stackHabits) {
+      if (habit.category === "bad") {
+        const badEntry = existingLog.badEntries[habit.id];
+        if (badEntry && badEntry.occurred !== undefined && badEntry.occurred !== null) {
+          prefilledBad.set(habit.id, {
+            habitId: habit.id,
+            occurred: badEntry.occurred,
+            durationMinutes: badEntry.durationMinutes,
+          });
+        }
+      } else {
+        const entry = existingLog.entries[habit.id];
+        if (entry && entry.status && entry.status !== "later") {
+          prefilled.set(habit.id, {
+            habitId: habit.id,
+            status: entry.status,
+            value: entry.value,
+          });
+        }
+      }
+    }
+
+    if (prefilled.size > 0) setEntries(prefilled);
+    if (prefilledBad.size > 0) setBadEntries(prefilledBad);
+  }, [stackHabits]);
+
   // Split into categories — for intense/critical, separate bare minimum from extras
   const allBinary = stackHabits.filter((h) => h.category === "binary");
   const allMeasured = stackHabits.filter((h) => h.category === "measured");
@@ -351,7 +387,50 @@ export default function CheckinPage() {
     setPhase("result");
   }
 
-  // ─── Day Complete Overlay ──────────────────────────────────
+  // ─── Day Already Complete Guard ──────────────────────────────
+  // When navigating to checkin and day is already fully done, show lock screen
+  const [dayAlreadyComplete, setDayAlreadyComplete] = useState(false);
+  useEffect(() => {
+    const s = loadState();
+    if (isDayFullyComplete(s) && phase === "checkin") {
+      setDayAlreadyComplete(true);
+    }
+  }, [phase]);
+
+  if (dayAlreadyComplete && phase === "checkin") {
+    const today = getToday();
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
+        <div className="text-6xl mb-6">🌳</div>
+        <h1 className="text-2xl font-black text-white mb-2">Day Complete</h1>
+        <p className="text-sm text-neutral-400 mb-8">
+          All habits have been logged for today. Your tree is growing.
+        </p>
+        <div className="w-full max-w-xs space-y-3">
+          <a
+            href={`/edit-log?date=${today}`}
+            className="block w-full rounded-xl py-4 text-sm font-bold bg-brand hover:bg-brand-dark text-white transition-all active:scale-[0.98]"
+          >
+            Edit Today&apos;s Inputs
+          </a>
+          <a
+            href="/"
+            className="block w-full rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 text-neutral-300 transition-all active:scale-[0.98]"
+          >
+            Back to Dashboard
+          </a>
+          <button
+            onClick={() => setDayAlreadyComplete(false)}
+            className="w-full text-xs text-neutral-600 hover:text-neutral-400 transition-colors mt-2"
+          >
+            Override — log anyway
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Day Complete Overlay (after submission) ──────────────────────────────
   if (dayCompleteStats && phase === "result") {
     return (
       <>
