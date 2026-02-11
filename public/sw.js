@@ -9,14 +9,26 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
-// Activate — clean old caches
+// Activate — clean old caches + refresh push subscription
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      )
-    )
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(
+          keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        )
+      ),
+      // Refresh push subscription with server if it exists
+      self.registration.pushManager.getSubscription().then((sub) => {
+        if (sub) {
+          return fetch("/api/push", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subscription: sub.toJSON() }),
+          }).catch(() => {});
+        }
+      }),
+    ])
   );
   self.clients.claim();
 });

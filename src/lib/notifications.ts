@@ -74,7 +74,110 @@ export async function requestNotificationPermission(): Promise<boolean> {
   if (Notification.permission === "denied") return false;
 
   const result = await Notification.requestPermission();
+  if (result === "granted") {
+    // Subscribe to push when permission is granted
+    subscribeToPush().catch(() => {});
+  }
   return result === "granted";
+}
+
+// ─── Web Push Subscription ──────────────────────────────────
+const PUSH_SUB_KEY = "accountability-push-subscription";
+
+export async function subscribeToPush(): Promise<PushSubscription | null> {
+  try {
+    const registration = await navigator.serviceWorker?.ready;
+    if (!registration) return null;
+
+    const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!vapidKey) return null;
+
+    // Convert VAPID key to ArrayBuffer for pushManager.subscribe
+    const urlBase64ToArrayBuffer = (base64String: string): ArrayBuffer => {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const rawData = atob(base64);
+      const buffer = new ArrayBuffer(rawData.length);
+      const view = new Uint8Array(buffer);
+      for (let i = 0; i < rawData.length; i++) {
+        view[i] = rawData.charCodeAt(i);
+      }
+      return buffer;
+    };
+
+    // Check for existing subscription
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToArrayBuffer(vapidKey),
+      });
+    }
+
+    // Store locally as backup
+    localStorage.setItem(PUSH_SUB_KEY, JSON.stringify(subscription.toJSON()));
+
+    // Register with server
+    const settings = loadSettings();
+    await fetch("/api/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subscription: subscription.toJSON(),
+        checkinTimes: settings.checkinTimes,
+      }),
+    }).catch(() => {}); // don't block on network failure
+
+    return subscription;
+  } catch {
+    return null;
+  }
+}
+
+export function getStoredPushSubscription(): PushSubscriptionJSON | null {
+  try {
+    const raw = localStorage.getItem(PUSH_SUB_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Send a push notification via the server (for background delivery) */
+export async function sendServerPush(
+  title: string,
+  body: string,
+  tag?: string,
+  url?: string
+): Promise<boolean> {
+  const subscription = getStoredPushSubscription();
+  if (!subscription) return false;
+
+  try {
+    const response = await fetch("/api/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subscription,
+        title,
+        body,
+        tag,
+        url,
+      }),
+    });
+
+    if (response.status === 410) {
+      // Subscription expired — re-subscribe
+      localStorage.removeItem(PUSH_SUB_KEY);
+      subscribeToPush().catch(() => {});
+      return false;
+    }
+
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function getNotificationPermission(): NotificationPermission | "unsupported" {
@@ -173,6 +276,8 @@ function tickScheduler(): void {
     if (currentTime === checkin.time && notifState.lastCheckinDate[checkin.stack] !== today) {
       const msg = CHECKIN_MESSAGES[checkin.stack];
       showNotification(msg.title, msg.body, `checkin-${checkin.stack}`, "/checkin");
+      // Also try server-side push for background delivery
+      sendServerPush(msg.title, msg.body, `checkin-${checkin.stack}`, "/checkin").catch(() => {});
       notifState.lastCheckinDate[checkin.stack] = today;
       saveNotifState(notifState);
     }
