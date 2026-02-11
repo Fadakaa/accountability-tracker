@@ -8,6 +8,7 @@ import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel } from "@/lib/habits";
 import type { Habit, HabitStack } from "@/types/database";
+import { DEFAULT_TREE_BRANCHES, getHabitBranch } from "@/lib/treeBranches";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -157,6 +158,7 @@ export default function SettingsPage() {
                   <HabitSettingsRow
                     key={habit.id}
                     habit={habit}
+                    settings={settings}
                     isFirst={idx === 0}
                     isLast={idx === byStack[stack.key].length - 1}
                     onStackChange={(newStack) => {
@@ -167,6 +169,9 @@ export default function SettingsPage() {
                     }}
                     onBareMinToggle={() => {
                       updateHabit(habit.id, { is_bare_minimum: !habit.is_bare_minimum });
+                    }}
+                    onBranchChange={(branchId) => {
+                      updateHabit(habit.id, { treeBranch: branchId });
                     }}
                     onDeactivate={() => {
                       updateHabit(habit.id, { is_active: false });
@@ -242,19 +247,23 @@ export default function SettingsPage() {
 // ─── Habit Settings Row ─────────────────────────────────────
 function HabitSettingsRow({
   habit,
+  settings,
   isFirst,
   isLast,
   onStackChange,
   onBareMinToggle,
+  onBranchChange,
   onDeactivate,
   onMoveUp,
   onMoveDown,
 }: {
   habit: Habit;
+  settings: UserSettings;
   isFirst: boolean;
   isLast: boolean;
   onStackChange: (stack: HabitStack) => void;
   onBareMinToggle: () => void;
+  onBranchChange: (branchId: string) => void;
   onDeactivate: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -312,6 +321,31 @@ function HabitSettingsRow({
                   {s.icon} {s.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Tree branch picker */}
+          <div>
+            <label className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1 block">
+              Tree Branch
+            </label>
+            <div className="flex gap-1.5">
+              {DEFAULT_TREE_BRANCHES.map((b) => {
+                const currentBranch = getHabitBranch(habit, settings);
+                return (
+                  <button
+                    key={b.id}
+                    onClick={() => onBranchChange(b.id)}
+                    className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition-colors ${
+                      currentBranch === b.id
+                        ? "bg-brand text-white"
+                        : "bg-surface-700 text-neutral-500 hover:text-neutral-300"
+                    }`}
+                  >
+                    {b.icon} {b.name.slice(0, 4)}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

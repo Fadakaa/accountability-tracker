@@ -232,6 +232,7 @@ export interface HabitOverride {
   is_active?: boolean;
   current_level?: number;
   sort_order?: number;
+  treeBranch?: string;
 }
 
 export interface LevelUpState {
@@ -260,6 +261,7 @@ export interface UserSettings {
   customQuotes: { id: string; text: string; category: string; isDefault: false }[];
   hiddenQuoteIds: string[];
   routineChains: Record<HabitStack, ChainItem[]>;
+  treeBranches?: { id: string; name: string; icon: string; color: string; isDefault: boolean }[];
 }
 
 const DEFAULT_SETTINGS: UserSettings = {

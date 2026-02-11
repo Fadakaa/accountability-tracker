@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState } from "@/lib/store";
+import { loadState, loadSettings } from "@/lib/store";
 import type { LocalState } from "@/lib/store";
 import { HABIT_LEVELS, getFlameIcon } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { evaluateLevelSuggestions, acceptLevelUp, declineLevelUp, acceptDropBack } from "@/lib/adaptive";
 import type { LevelSuggestion } from "@/lib/adaptive";
+import { DEFAULT_TREE_BRANCHES, NEW_GROWTH_BRANCH, getHabitBranch } from "@/lib/treeBranches";
+import type { TreeBranchDef } from "@/lib/treeBranches";
 
 // ─── Skill Tree Data ────────────────────────────────────────
 interface SkillNode {
@@ -20,21 +22,25 @@ interface SkillNode {
 }
 
 interface SkillBranch {
+  id: string;
   name: string;
   icon: string;
   color: string;
   nodes: SkillNode[];
 }
 
-// Build branches from HABIT_LEVELS data
+// Build branches dynamically from habit data + branch assignments
 function buildSkillTree(): SkillBranch[] {
-  // Map habit IDs that have levels
-  const habitMap = new Map<string, SkillNode[]>();
-  for (const hl of HABIT_LEVELS) {
-    const habit = getResolvedHabits().find((h) => h.id === hl.habit_id);
-    if (!habit) continue;
+  const settings = loadSettings();
+  const habits = getResolvedHabits().filter((h) => h.is_active);
+  const branchDefs = settings.treeBranches ?? DEFAULT_TREE_BRANCHES;
 
-    const nodes = habitMap.get(habit.slug) ?? [];
+  // Build a lookup: habitId → SkillNode[] from HABIT_LEVELS
+  const levelsByHabit = new Map<string, SkillNode[]>();
+  for (const hl of HABIT_LEVELS) {
+    const habit = habits.find((h) => h.id === hl.habit_id);
+    if (!habit) continue;
+    const nodes = levelsByHabit.get(habit.id) ?? [];
     nodes.push({
       habitSlug: habit.slug,
       habitId: habit.id,
@@ -44,53 +50,55 @@ function buildSkillTree(): SkillBranch[] {
       label: hl.label,
       description: hl.description,
     });
-    habitMap.set(habit.slug, nodes);
+    levelsByHabit.set(habit.id, nodes);
   }
 
-  // Organize into branches per the spec
-  const branches: SkillBranch[] = [
-    {
-      name: "Spiritual",
-      icon: "🙏",
-      color: "#a78bfa", // purple
-      nodes: [
-        ...(habitMap.get("prayer") ?? []),
-        ...(habitMap.get("bible-reading") ?? []),
-        ...(habitMap.get("meditation") ?? []),
-      ],
-    },
-    {
-      name: "Physical",
-      icon: "💪",
-      color: "#f97316", // orange
-      nodes: [
-        ...(habitMap.get("training") ?? []),
-        ...(habitMap.get("training-minutes") ?? []),
-        ...(habitMap.get("cold-exposure") ?? []),
-      ],
-    },
-    {
-      name: "Mind",
-      icon: "🧠",
-      color: "#3b82f6", // blue
-      nodes: [
-        ...(habitMap.get("reading") ?? []),
-        ...(habitMap.get("journal") ?? []),
-        ...(habitMap.get("deep-work") ?? []),
-        ...(habitMap.get("keystone-task") ?? []),
-      ],
-    },
-    {
-      name: "Environment",
-      icon: "🏠",
-      color: "#22c55e", // green
-      nodes: [
-        ...(habitMap.get("tidy") ?? []),
-      ],
-    },
-  ];
+  // Assign each active habit to a branch
+  const branchHabits = new Map<string, SkillNode[]>();
 
-  return branches;
+  for (const habit of habits) {
+    // Skip bad habits — they don't belong on the skill tree
+    if (habit.category === "bad") continue;
+
+    const branchId = getHabitBranch(habit, settings);
+    const existingLevels = levelsByHabit.get(habit.id);
+
+    let nodes: SkillNode[];
+    if (existingLevels && existingLevels.length > 0) {
+      // Habit has HABIT_LEVELS → show Lv.1–4 progression
+      nodes = existingLevels;
+    } else {
+      // No HABIT_LEVELS → single placeholder node
+      nodes = [{
+        habitSlug: habit.slug,
+        habitId: habit.id,
+        habitName: habit.name,
+        icon: habit.icon || "🔵",
+        level: 1,
+        label: habit.name,
+        description: "Building consistency...",
+      }];
+    }
+
+    const existing = branchHabits.get(branchId) ?? [];
+    branchHabits.set(branchId, [...existing, ...nodes]);
+  }
+
+  // Build final branches: default branches always show, new-growth only if populated
+  const allDefs: TreeBranchDef[] = [...branchDefs, NEW_GROWTH_BRANCH];
+  return allDefs
+    .map((def) => ({
+      id: def.id,
+      name: def.name,
+      icon: def.icon,
+      color: def.color,
+      nodes: branchHabits.get(def.id) ?? [],
+    }))
+    .filter((b) => {
+      // Always show default branches, only show new-growth if it has habits
+      const def = allDefs.find((d) => d.id === b.id);
+      return b.nodes.length > 0 || (def?.isDefault ?? false);
+    });
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -296,7 +304,7 @@ export default function SkillTreePage() {
       <div className="space-y-6">
         {branches.map((branch) => (
           <BranchCard
-            key={branch.name}
+            key={branch.id}
             branch={branch}
             streaks={state.streaks}
             resolvedHabits={resolvedHabits}
@@ -335,6 +343,8 @@ function BranchCard({
     habitGroups.set(node.habitSlug, group);
   }
 
+  const isNewGrowth = branch.id === "new-growth";
+
   return (
     <section className="rounded-xl bg-surface-800 border border-surface-700 p-4">
       <div className="flex items-center gap-2 mb-4">
@@ -343,6 +353,10 @@ function BranchCard({
           {branch.name} Branch
         </h2>
       </div>
+
+      {branch.nodes.length === 0 && (
+        <p className="text-xs text-neutral-600 italic py-2">No habits assigned yet</p>
+      )}
 
       <div className="space-y-4">
         {Array.from(habitGroups.entries()).map(([slug, nodes]) => {
@@ -404,6 +418,12 @@ function BranchCard({
           );
         })}
       </div>
+
+      {isNewGrowth && (
+        <p className="text-[10px] text-neutral-600 mt-3 italic">
+          Assign these habits to a branch in Settings
+        </p>
+      )}
     </section>
   );
 }
