@@ -19,7 +19,7 @@ const COMMON_EXERCISES: Record<string, string[]> = {
   "Full Body": ["Clean & Press", "Thruster", "Burpees", "Turkish Get Up"],
 };
 
-type Phase = "setup" | "logging" | "complete";
+type Phase = "setup" | "logging" | "complete" | "archive";
 
 export default function GymPage() {
   const [phase, setPhase] = useState<Phase>("setup");
@@ -287,36 +287,14 @@ export default function GymPage() {
           Start Logging →
         </button>
 
-        {/* Recent Sessions */}
+        {/* Session Archive Link */}
         {pastSessions.length > 0 && (
-          <section className="mt-4">
-            <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
-              Recent Sessions
-            </h2>
-            <div className="space-y-2">
-              {pastSessions
-                .slice(-5)
-                .reverse()
-                .map((s) => (
-                  <div
-                    key={s.id}
-                    className="rounded-lg bg-surface-800 px-3 py-2 text-sm flex items-center justify-between"
-                  >
-                    <span className="text-neutral-300">
-                      {s.trainingType === "gym"
-                        ? `🏋️ ${s.muscleGroup || "Gym"}`
-                        : s.trainingType === "bjj"
-                          ? "🥋 BJJ"
-                          : "🏃 Run"}
-                    </span>
-                    <span className="text-xs text-neutral-600">
-                      {s.date}
-                      {s.justWalkedIn && " (walked in)"}
-                    </span>
-                  </div>
-                ))}
-            </div>
-          </section>
+          <button
+            onClick={() => setPhase("archive")}
+            className="w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 hover:text-neutral-200 font-medium transition-colors mt-4"
+          >
+            📂 View Session Archive ({pastSessions.length} sessions)
+          </button>
         )}
       </div>
     );
@@ -475,6 +453,46 @@ export default function GymPage() {
     );
   }
 
+  // ─── Archive Phase ─────────────────────────────────────
+  if (phase === "archive") {
+    // Group sessions by date
+    const grouped = new Map<string, GymSessionLocal[]>();
+    for (const s of [...pastSessions].reverse()) {
+      const existing = grouped.get(s.date) || [];
+      existing.push(s);
+      grouped.set(s.date, existing);
+    }
+
+    return (
+      <div className="flex flex-col min-h-screen px-4 py-6">
+        <header className="mb-6">
+          <button
+            onClick={() => setPhase("setup")}
+            className="text-neutral-500 text-sm hover:text-neutral-300"
+          >
+            ← Back
+          </button>
+          <h1 className="text-xl font-bold mt-1">📂 Session Archive</h1>
+          <p className="text-xs text-neutral-500 mt-1">
+            {pastSessions.length} total session{pastSessions.length !== 1 ? "s" : ""}
+          </p>
+        </header>
+
+        <div className="space-y-4">
+          {Array.from(grouped.entries()).map(([date, sessions]) => (
+            <ArchiveDateGroup key={date} date={date} sessions={sessions} />
+          ))}
+        </div>
+
+        {pastSessions.length === 0 && (
+          <div className="flex-1 flex items-center justify-center text-neutral-600 text-sm">
+            No sessions logged yet.
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // ─── Complete Phase ────────────────────────────────────
   return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
@@ -622,6 +640,136 @@ function ExerciseCard({
           + Add Set
         </button>
       )}
+    </div>
+  );
+}
+
+// ─── Archive Date Group ─────────────────────────────────────
+function ArchiveDateGroup({ date, sessions }: { date: string; sessions: GymSessionLocal[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const dateObj = new Date(date + "T12:00:00");
+  const dayLabel = dateObj.toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
+  // Summary of training types for this date
+  const typeIcons = sessions.map((s) =>
+    s.trainingType === "gym" ? "🏋️" : s.trainingType === "bjj" ? "🥋" : "🏃"
+  );
+  const typeSummary = sessions
+    .map((s) =>
+      s.trainingType === "gym"
+        ? s.muscleGroup || "Gym"
+        : s.trainingType === "bjj"
+          ? "BJJ"
+          : "Run"
+    )
+    .join(" + ");
+
+  return (
+    <div className="rounded-xl bg-surface-800 border border-surface-700 overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-surface-700/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-sm">{typeIcons.join("")}</span>
+          <div>
+            <span className="text-sm font-semibold text-neutral-200">{typeSummary}</span>
+            <span className="text-xs text-neutral-500 ml-2">{dayLabel}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-neutral-600">
+            {sessions.length} session{sessions.length > 1 ? "s" : ""}
+          </span>
+          <span className="text-neutral-600 text-xs">{expanded ? "▲" : "▼"}</span>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-surface-700 px-4 py-3 space-y-3">
+          {sessions.map((session) => (
+            <ArchiveSessionCard key={session.id} session={session} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Archive Session Card ───────────────────────────────────
+function ArchiveSessionCard({ session }: { session: GymSessionLocal }) {
+  const typeLabel =
+    session.trainingType === "gym"
+      ? `🏋️ ${session.muscleGroup || "Gym"}`
+      : session.trainingType === "bjj"
+        ? "🥋 BJJ"
+        : "🏃 Run";
+
+  return (
+    <div className="rounded-lg bg-surface-700/50 p-3 space-y-2">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold">{typeLabel}</span>
+        <div className="flex items-center gap-2 text-xs text-neutral-500">
+          {session.justWalkedIn && (
+            <span className="text-done font-medium">Just walked in</span>
+          )}
+          {session.durationMinutes && (
+            <span>{session.durationMinutes} min</span>
+          )}
+          {session.rpe && (
+            <span className={`font-bold ${
+              session.rpe >= 8 ? "text-missed" : session.rpe >= 5 ? "text-later" : "text-done"
+            }`}>
+              RPE {session.rpe}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Exercises */}
+      {session.exercises.length > 0 && (
+        <div className="space-y-1.5">
+          {session.exercises.map((ex) => (
+            <div key={ex.id} className="text-xs">
+              <span className="text-neutral-300 font-medium">{ex.name}</span>
+              <div className="flex flex-wrap gap-1.5 mt-0.5">
+                {ex.sets.map((set, i) => (
+                  <span
+                    key={i}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${
+                      set.isFailure
+                        ? "bg-missed/20 text-missed"
+                        : "bg-surface-600 text-neutral-400"
+                    }`}
+                  >
+                    {set.weightKg ?? "?"}kg × {set.reps ?? "?"}
+                    {set.isFailure && " F"}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Notes */}
+      {session.notes && (
+        <p className="text-xs text-neutral-500 italic">{session.notes}</p>
+      )}
+
+      {/* Time logged */}
+      <div className="text-[10px] text-neutral-600">
+        Logged at {new Date(session.createdAt).toLocaleTimeString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })}
+      </div>
     </div>
   );
 }

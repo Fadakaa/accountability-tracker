@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings, saveSettings, saveState } from "@/lib/store";
+import { loadSettings, saveSettings, saveState, loadState } from "@/lib/store";
 import type { UserSettings, HabitOverride, LocalState } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
@@ -671,18 +671,29 @@ function NotificationSection() {
   );
 }
 
-// ─── Reset All Data ──────────────────────────────────────
+// ─── Reset Buttons ──────────────────────────────────────
 function ResetDataButton() {
-  const [confirmStep, setConfirmStep] = useState(0);
-  const [done, setDone] = useState(false);
+  const [streakResetDone, setStreakResetDone] = useState(false);
+  const [fullResetStep, setFullResetStep] = useState(0);
+  const [fullResetDone, setFullResetDone] = useState(false);
 
-  function handleReset() {
-    if (confirmStep === 0) {
-      setConfirmStep(1);
+  function handleStreakReset() {
+    const state = loadState();
+    // Reset all individual habit streaks to 0
+    state.streaks = {};
+    // Reset bare minimum streak to 0 (day 1 starts fresh)
+    state.bareMinimumStreak = 0;
+    saveState(state);
+    setStreakResetDone(true);
+    setTimeout(() => setStreakResetDone(false), 3000);
+  }
+
+  function handleFullReset() {
+    if (fullResetStep === 0) {
+      setFullResetStep(1);
       return;
     }
 
-    // Actually reset all data
     const freshState: LocalState = {
       totalXp: 0,
       currentLevel: 1,
@@ -694,37 +705,51 @@ function ResetDataButton() {
     };
     saveState(freshState);
 
-    // Clear gym sessions
     if (typeof window !== "undefined") {
       localStorage.removeItem("accountability-gym");
       localStorage.removeItem("accountability-notifications");
     }
 
-    setDone(true);
-    setConfirmStep(0);
-    setTimeout(() => setDone(false), 3000);
-  }
-
-  if (done) {
-    return (
-      <div className="w-full rounded-xl border border-done/30 bg-done/10 py-3 text-sm text-done font-medium text-center">
-        All data reset to zero
-      </div>
-    );
+    setFullResetDone(true);
+    setFullResetStep(0);
+    setTimeout(() => setFullResetDone(false), 3000);
   }
 
   return (
-    <button
-      onClick={handleReset}
-      className={`w-full rounded-xl border py-3 text-sm transition-colors ${
-        confirmStep === 1
-          ? "border-missed/50 bg-missed/10 text-missed font-bold hover:bg-missed/20"
-          : "border-missed/20 text-neutral-600 hover:text-missed hover:border-missed/40"
-      }`}
-    >
-      {confirmStep === 1
-        ? "⚠️ Tap again to confirm — this erases ALL XP, streaks, and logs"
-        : "Reset All Data (XP, Streaks, Logs)"}
-    </button>
+    <div className="space-y-2">
+      {/* Streak reset — keeps XP, logs, gym data */}
+      <button
+        onClick={handleStreakReset}
+        className={`w-full rounded-xl border py-3 text-sm transition-colors ${
+          streakResetDone
+            ? "border-done/30 bg-done/10 text-done font-medium"
+            : "border-surface-700 text-neutral-500 hover:text-neutral-300 hover:border-neutral-600"
+        }`}
+      >
+        {streakResetDone
+          ? "✓ All streaks reset to Day 1"
+          : "Reset All Streaks to Day 1"}
+      </button>
+
+      {/* Full data reset */}
+      {fullResetDone ? (
+        <div className="w-full rounded-xl border border-done/30 bg-done/10 py-3 text-sm text-done font-medium text-center">
+          All data reset to zero
+        </div>
+      ) : (
+        <button
+          onClick={handleFullReset}
+          className={`w-full rounded-xl border py-3 text-sm transition-colors ${
+            fullResetStep === 1
+              ? "border-missed/50 bg-missed/10 text-missed font-bold hover:bg-missed/20"
+              : "border-missed/20 text-neutral-600 hover:text-missed hover:border-missed/40"
+          }`}
+        >
+          {fullResetStep === 1
+            ? "Tap again to confirm — erases ALL XP, streaks, logs, and gym data"
+            : "Nuclear Reset (erase everything)"}
+        </button>
+      )}
+    </div>
   );
 }
