@@ -1,121 +1,88 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  requestNotificationPermission,
-  getNotificationPermission,
-  startNotificationScheduler,
-  getPendingEscalationCount,
-  syncScheduleToServiceWorker,
-  pingServiceWorker,
-} from "@/lib/notifications";
+import { useState } from "react";
 
 export default function NotificationBanner() {
-  const [permission, setPermission] = useState<string>("default");
-  const [pendingCount, setPendingCount] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
-  useEffect(() => {
-    const perm = getNotificationPermission();
-    setPermission(perm);
+  // Check if the user has seen this banner before
+  if (typeof window !== "undefined" && localStorage.getItem("ntfy-banner-dismissed")) {
+    return null;
+  }
 
-    // If already granted, start scheduler + sync to SW
-    if (perm === "granted") {
-      startNotificationScheduler();
-      syncScheduleToServiceWorker();
-      // Ping SW every 5 min to keep it alive
-      const pingInterval = setInterval(() => pingServiceWorker(), 5 * 60 * 1000);
-      return () => clearInterval(pingInterval);
-    }
+  if (dismissed) return null;
 
-    // Poll pending escalations every 30s
-    const interval = setInterval(() => {
-      setPendingCount(getPendingEscalationCount());
-    }, 30000);
-    setPendingCount(getPendingEscalationCount());
-
-    return () => clearInterval(interval);
-  }, []);
-
-  async function handleEnable() {
-    const granted = await requestNotificationPermission();
-    setPermission(granted ? "granted" : "denied");
-    if (granted) {
-      startNotificationScheduler();
-      syncScheduleToServiceWorker();
+  function handleDismiss() {
+    setDismissed(true);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ntfy-banner-dismissed", "1");
     }
   }
 
-  // Show pending escalations banner
-  if (pendingCount > 0) {
-    return (
-      <div className="mx-4 mb-4 rounded-xl bg-later/20 border border-later/30 px-4 py-3 flex items-center justify-between">
+  async function handleTest() {
+    setTestStatus("sending");
+    try {
+      const res = await fetch("/api/notify/test", { method: "POST" });
+      if (res.ok) {
+        setTestStatus("sent");
+        setTimeout(() => {
+          handleDismiss();
+        }, 3000);
+      } else {
+        setTestStatus("error");
+      }
+    } catch {
+      setTestStatus("error");
+    }
+  }
+
+  return (
+    <div className="mx-4 mb-4 rounded-xl bg-surface-800 border border-brand/30 px-4 py-3">
+      <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-lg">⏰</span>
-          <span className="text-sm text-later font-medium">
-            {pendingCount} habit{pendingCount > 1 ? "s" : ""} pending
-          </span>
+          <span className="text-lg">📱</span>
+          <span className="text-sm font-semibold">Phone notifications</span>
         </div>
-        <a
-          href="/checkin"
-          className="text-xs font-bold text-later hover:text-white transition-colors"
-        >
-          Resolve →
-        </a>
-      </div>
-    );
-  }
-
-  // Permission prompt
-  if (permission === "default" && !dismissed) {
-    return (
-      <div className="mx-4 mb-4 rounded-xl bg-surface-800 border border-brand/30 px-4 py-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🔔</span>
-            <span className="text-sm font-semibold">Enable notifications</span>
-          </div>
-          <button
-            onClick={() => setDismissed(true)}
-            className="text-neutral-600 text-xs hover:text-neutral-400"
-          >
-            ✕
-          </button>
-        </div>
-        <p className="text-xs text-neutral-400 mb-3">
-          Get check-in reminders at 7am, 1pm, and 9pm. The system chases you.
-        </p>
         <button
-          onClick={handleEnable}
-          className="w-full rounded-lg bg-brand hover:bg-brand-dark text-white text-sm font-bold py-2.5 transition-colors active:scale-[0.98]"
+          onClick={handleDismiss}
+          className="text-neutral-600 text-xs hover:text-neutral-400"
         >
-          Enable Push Notifications
+          ✕
         </button>
       </div>
-    );
-  }
-
-  // Denied state
-  if (permission === "denied" && !dismissed) {
-    return (
-      <div className="mx-4 mb-4 rounded-xl bg-surface-800 border border-missed/30 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🔕</span>
-            <span className="text-xs text-neutral-400">
-              Notifications blocked. Enable in browser settings.
-            </span>
-          </div>
-          <button
-            onClick={() => setDismissed(true)}
-            className="text-neutral-600 text-xs hover:text-neutral-400"
-          >
-            ✕
-          </button>
-        </div>
+      <p className="text-xs text-neutral-400 mb-3">
+        Install the <span className="text-white font-medium">ntfy</span> app
+        and subscribe to your topic to get check-in reminders at 7am, 1pm, 9pm.
+        See Settings for details.
+      </p>
+      <div className="flex gap-2">
+        <button
+          onClick={handleTest}
+          disabled={testStatus === "sending"}
+          className={`flex-1 rounded-lg py-2 text-sm font-bold transition-all active:scale-[0.98] ${
+            testStatus === "sent"
+              ? "bg-done/20 text-done border border-done/30"
+              : testStatus === "error"
+                ? "bg-missed/20 text-missed border border-missed/30"
+                : "bg-brand hover:bg-brand-dark text-white"
+          }`}
+        >
+          {testStatus === "sending"
+            ? "Sending..."
+            : testStatus === "sent"
+              ? "✓ Check your phone!"
+              : testStatus === "error"
+                ? "Failed — see Settings"
+                : "Test Notification"}
+        </button>
+        <a
+          href="/settings"
+          className="flex-1 rounded-lg py-2 text-sm font-medium bg-surface-700 text-neutral-300 text-center hover:text-white transition-colors"
+        >
+          Setup Guide
+        </a>
       </div>
-    );
-  }
-
-  return null;
+    </div>
+  );
 }
