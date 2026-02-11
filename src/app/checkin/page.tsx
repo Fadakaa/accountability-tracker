@@ -2,11 +2,11 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
-import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateStreaks } from "@/lib/store";
-import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder } from "@/lib/resolvedHabits";
+import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred } from "@/lib/store";
+import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
 import { startEscalation, resolveEscalation, resolveAllEscalations } from "@/lib/notifications";
-import type { DayLog } from "@/lib/store";
+import type { DayLog, DeferredHabit } from "@/lib/store";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -68,6 +68,9 @@ export default function CheckinPage() {
   // Sprint context — affects which habits are shown and how
   const sprint = useMemo(() => getSprintContext(), []);
 
+  // Defer modal state — shown when user clicks "Later" on a binary habit
+  const [deferModalHabitId, setDeferModalHabitId] = useState<string | null>(null);
+
   // Lock screen state — shows when a stack is already submitted
   const [stackAlreadyDone, setStackAlreadyDone] = useState(false);
   const [lockSummary, setLockSummary] = useState<{ done: number; missed: number; later: number; cleanBad: number; slippedBad: number; measuredCount: number; totalXp: number; bareMinStreak: number }>({ done: 0, missed: 0, later: 0, cleanBad: 0, slippedBad: 0, measuredCount: 0, totalXp: 0, bareMinStreak: 0 });
@@ -89,6 +92,11 @@ export default function CheckinPage() {
     const todayLog = state.logs.find((l) => l.date === today);
     if (todayLog && phase === "checkin") {
       const stackHabitIds = new Set(getResolvedHabitsByChainOrder(activeStack).map((h) => h.id));
+      // Also include deferred habits that landed in this stack
+      const deferredToHere = getDeferredForStack(activeStack);
+      for (const d of deferredToHere) {
+        stackHabitIds.add(d.habitId);
+      }
 
       // Restore binary/measured entries for this stack
       const restoredEntries = new Map<string, CheckinEntry>();
@@ -135,7 +143,8 @@ export default function CheckinPage() {
     }
 
     const stackHabits = getResolvedHabitsByChainOrder(stack);
-    const stackBinary = stackHabits.filter((h) => h.category === "binary" && h.is_active);
+    // Exclude habits that have been deferred to a later stack
+    const stackBinary = stackHabits.filter((h) => h.category === "binary" && h.is_active && !isDeferredAway(h.id));
     const stackBad = stackHabits.filter((h) => h.category === "bad" && h.is_active);
     const stackMeasured = stackHabits.filter((h) => h.category === "measured" && h.is_active);
 
@@ -171,10 +180,10 @@ export default function CheckinPage() {
       setLockSummary({ done, missed, later, cleanBad, slippedBad, measuredCount, totalXp: todayLog.xpEarned, bareMinStreak: s.bareMinimumStreak ?? 0 });
       setStackAlreadyDone(true);
 
-      // Check if ALL stacks are done
+      // Check if ALL stacks are done (excluding deferred-away habits)
       const allStacks: HabitStack[] = ["morning", "midday", "evening"];
       const allDone = allStacks.every((st) => {
-        const stBinary = getResolvedHabitsByChainOrder(st).filter((h) => h.category === "binary" && h.is_active);
+        const stBinary = getResolvedHabitsByChainOrder(st).filter((h) => h.category === "binary" && h.is_active && !isDeferredAway(h.id));
         if (stBinary.length === 0) return true;
         return stBinary.every((h) => {
           const entry = todayLog.entries[h.id];
@@ -208,9 +217,20 @@ export default function CheckinPage() {
   }, [activeStack, sprint.singleCheckin]);
 
   // Split into categories — for intense/critical, separate bare minimum from extras
-  const allBinary = stackHabits.filter((h) => h.category === "binary");
+  // Also filter out habits that have been deferred to a later stack
+  const allBinary = stackHabits.filter((h) => h.category === "binary" && !isDeferredAway(h.id));
   const allMeasured = stackHabits.filter((h) => h.category === "measured");
   const badHabits = stackHabits.filter((h) => h.category === "bad");
+
+  // Load habits that were deferred TO this stack from an earlier stack
+  const deferredToThisStack = useMemo(() => {
+    if (sprint.singleCheckin) return []; // No deferrals in single-checkin sprint mode
+    const deferred = getDeferredForStack(activeStack);
+    const allHabits = getResolvedHabits();
+    return deferred
+      .map((d) => allHabits.find((h) => h.id === d.habitId))
+      .filter((h): h is ResolvedHabit => h != null);
+  }, [activeStack, sprint.singleCheckin]);
 
   // Sprint filtering: bare minimum only for intense/critical, but extras are still visible
   const binaryHabits = sprint.bareMinimumOnly
@@ -238,7 +258,25 @@ export default function CheckinPage() {
   const canSubmit = allBinaryAnswered && allBadAnswered;
   const canSavePartial = anyAnswered && !canSubmit;
 
+  // Stack order for determining which stacks come "later"
+  const STACK_ORDER: HabitStack[] = ["morning", "midday", "evening"];
+  const laterStacks = STACK_ORDER.slice(STACK_ORDER.indexOf(activeStack) + 1);
+
   function setEntry(habitId: string, status: LogStatus) {
+    // If "later" and there are stacks to defer to (and not in singleCheckin sprint mode), show defer modal
+    if (status === "later" && laterStacks.length > 0 && !sprint.singleCheckin) {
+      // Set the entry as "later" visually
+      setEntries((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(habitId);
+        next.set(habitId, { habitId, status: "later", value: existing?.value ?? null });
+        return next;
+      });
+      // Open the defer modal
+      setDeferModalHabitId(habitId);
+      return;
+    }
+
     setEntries((prev) => {
       const next = new Map(prev);
       const existing = next.get(habitId);
@@ -251,18 +289,40 @@ export default function CheckinPage() {
     if (!habit) return;
 
     if (status === "later") {
-      // Local escalation (browser-based, for when app is open)
+      // No stacks to defer to (evening) or sprint singleCheckin — escalate immediately
       startEscalation(habitId, habit.name, habit.icon || "");
-      // ntfy escalation (phone push, works even when browser is closed)
       fetch("/api/notify/escalate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
-      }).catch(() => {}); // fire and forget
+      }).catch(() => {});
     } else {
       // Done or Missed — resolve any active escalation
       resolveEscalation(habitId);
     }
+  }
+
+  function handleDeferToStack(targetStack: HabitStack) {
+    if (!deferModalHabitId) return;
+    // Save the deferral
+    addDeferral(deferModalHabitId, activeStack, targetStack);
+    // Close the modal
+    setDeferModalHabitId(null);
+  }
+
+  function handleKeepEscalating() {
+    if (!deferModalHabitId) return;
+    const habit = getResolvedHabits().find((h) => h.id === deferModalHabitId);
+    if (habit) {
+      // Start Fibonacci escalation
+      startEscalation(deferModalHabitId, habit.name, habit.icon || "");
+      fetch("/api/notify/escalate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
+      }).catch(() => {});
+    }
+    setDeferModalHabitId(null);
   }
 
   function setMeasuredValue(habitId: string, value: number | null) {
@@ -357,7 +417,7 @@ export default function CheckinPage() {
     const today = getToday();
 
     // ─── 1. Calculate XP from binary habits ─────────────────
-    const allAnsweredBinary = [...binaryHabits, ...extraBinaryHabits];
+    const allAnsweredBinary = [...binaryHabits, ...extraBinaryHabits, ...deferredToThisStack];
     const todayLogBefore = state.logs.find((l) => l.date === today);
     for (const habit of allAnsweredBinary) {
       const entry = entries.get(habit.id);
@@ -483,6 +543,15 @@ export default function CheckinPage() {
     for (const habit of binaryHabits) {
       const entry = entries.get(habit.id);
       if (entry?.status === "done" || entry?.status === "missed") {
+        resolveEscalation(habit.id);
+      }
+    }
+
+    // Clean up deferrals for habits that were answered in this stack
+    for (const habit of deferredToThisStack) {
+      const entry = entries.get(habit.id);
+      if (entry?.status === "done" || entry?.status === "missed") {
+        removeDeferral(habit.id);
         resolveEscalation(habit.id);
       }
     }
@@ -902,6 +971,38 @@ export default function CheckinPage() {
         </section>
       )}
 
+      {/* Deferred Habits — moved from an earlier stack */}
+      {deferredToThisStack.length > 0 && (
+        <section className="mb-6">
+          <h2 className="text-xs font-bold text-later uppercase tracking-wider mb-3">
+            ⏰ Deferred from earlier
+          </h2>
+          <div className="space-y-3">
+            {deferredToThisStack.map((habit) => (
+              <BinaryHabitCard
+                key={`deferred-${habit.id}`}
+                habit={habit}
+                entry={entries.get(habit.id) ?? null}
+                streakDays={streaks[habit.slug] ?? 0}
+                needsAttention={false}
+                onSelect={(status) => {
+                  // For deferred habits, set entry directly (no re-deferring)
+                  setEntries((prev) => {
+                    const next = new Map(prev);
+                    const existing = next.get(habit.id);
+                    next.set(habit.id, { habitId: habit.id, status, value: existing?.value ?? null });
+                    return next;
+                  });
+                  if (status === "done" || status === "missed") {
+                    resolveEscalation(habit.id);
+                  }
+                }}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Bad Habit Cards */}
       {badHabits.length > 0 && (
         <section className="mb-6">
@@ -960,6 +1061,58 @@ export default function CheckinPage() {
           </p>
         )}
       </div>
+
+      {/* ─── Defer Modal ─────────────────────────────────────── */}
+      {deferModalHabitId && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center" onClick={() => setDeferModalHabitId(null)}>
+          <div
+            className="bg-surface-800 rounded-t-2xl w-full max-w-md p-6 pb-8 border-t border-surface-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-10 h-1 bg-neutral-600 rounded-full mx-auto mb-4" />
+            <h3 className="text-sm font-bold text-center mb-1">
+              ⏰ Move to later today
+            </h3>
+            <p className="text-xs text-neutral-500 text-center mb-5">
+              {(() => {
+                const h = getResolvedHabits().find((h) => h.id === deferModalHabitId);
+                return h ? `${h.icon} ${h.name}` : "";
+              })()}
+            </p>
+
+            <div className="flex gap-3 mb-4">
+              {laterStacks.map((stack) => (
+                <button
+                  key={stack}
+                  onClick={() => handleDeferToStack(stack)}
+                  className="flex-1 rounded-xl bg-later/10 border border-later/30 py-4 text-center hover:bg-later/20 active:scale-[0.97] transition-all"
+                >
+                  <div className="text-2xl mb-1">
+                    {stack === "midday" ? "☀️" : "🌙"}
+                  </div>
+                  <div className="text-xs font-semibold text-later capitalize">
+                    {stack === "midday" ? "Midday" : "Evening"}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-1 h-px bg-surface-700" />
+              <span className="text-[10px] text-neutral-600 uppercase tracking-wider">or</span>
+              <div className="flex-1 h-px bg-surface-700" />
+            </div>
+
+            <button
+              onClick={handleKeepEscalating}
+              className="w-full rounded-xl bg-surface-700 border border-surface-600 py-3 text-sm text-neutral-300 hover:text-white hover:border-brand/40 active:scale-[0.98] transition-all"
+            >
+              ⚡ Keep escalating
+              <span className="block text-[10px] text-neutral-500 mt-0.5">Fibonacci reminders until you do it</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

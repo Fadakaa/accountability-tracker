@@ -6,6 +6,55 @@ import type { LogStatus, SprintIntensity, TrainingType, HabitStack } from "@/typ
 const STORAGE_KEY = "accountability-tracker";
 const GYM_STORAGE_KEY = "accountability-gym";
 const SETTINGS_KEY = "accountability-settings";
+const DEFERRED_KEY = "accountability-deferred";
+
+// ─── Deferred Habits (temporary reschedule for today only) ───
+export interface DeferredHabit {
+  habitId: string;
+  fromStack: HabitStack;
+  toStack: HabitStack;
+  date: string; // YYYY-MM-DD — auto-clears if not today
+}
+
+export function loadDeferred(): DeferredHabit[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(DEFERRED_KEY);
+    if (!raw) return [];
+    const all: DeferredHabit[] = JSON.parse(raw);
+    const today = getToday();
+    // Auto-clean stale entries (not today)
+    const valid = all.filter((d) => d.date === today);
+    if (valid.length !== all.length) {
+      localStorage.setItem(DEFERRED_KEY, JSON.stringify(valid));
+    }
+    return valid;
+  } catch {
+    return [];
+  }
+}
+
+export function addDeferral(habitId: string, fromStack: HabitStack, toStack: HabitStack): void {
+  const deferred = loadDeferred();
+  // Remove any existing deferral for this habit (prevent duplicates)
+  const filtered = deferred.filter((d) => d.habitId !== habitId);
+  filtered.push({ habitId, fromStack, toStack, date: getToday() });
+  localStorage.setItem(DEFERRED_KEY, JSON.stringify(filtered));
+}
+
+export function removeDeferral(habitId: string): void {
+  const deferred = loadDeferred();
+  const filtered = deferred.filter((d) => d.habitId !== habitId);
+  localStorage.setItem(DEFERRED_KEY, JSON.stringify(filtered));
+}
+
+export function getDeferredForStack(stack: HabitStack): DeferredHabit[] {
+  return loadDeferred().filter((d) => d.toStack === stack);
+}
+
+export function isDeferredAway(habitId: string): boolean {
+  return loadDeferred().some((d) => d.habitId === habitId);
+}
 
 export interface DayLog {
   date: string; // YYYY-MM-DD

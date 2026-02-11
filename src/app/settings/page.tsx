@@ -57,21 +57,6 @@ export default function SettingsPage() {
     setHabits(getResolvedHabits());
   }
 
-  function updateCheckinTime(stack: HabitStack, time: string) {
-    if (!settings) return;
-    const newSettings = {
-      ...settings,
-      checkinTimes: {
-        ...settings.checkinTimes,
-        [stack]: time,
-      },
-    };
-    setSettings(newSettings);
-    saveSettings(newSettings);
-    // Sync new schedule to service worker
-    syncScheduleToServiceWorker();
-  }
-
   function moveHabit(habit: Habit, direction: "up" | "down") {
     const stackHabits = habits
       .filter((h) => h.stack === habit.stack && h.is_active)
@@ -114,33 +99,7 @@ export default function SettingsPage() {
         <h1 className="text-xl font-bold mt-1">⚙️ Settings</h1>
       </header>
 
-      {/* Check-in Schedule */}
-      <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
-        <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
-          Check-in Schedule
-        </h2>
-        <p className="text-xs text-neutral-600 mb-4">
-          Set when you want to be reminded to log habits
-        </p>
-        <div className="space-y-3">
-          {STACKS.map((stack) => (
-            <div key={stack.key} className="flex items-center justify-between">
-              <span className="text-sm flex items-center gap-2">
-                <span>{stack.icon}</span>
-                <span className="text-neutral-300 capitalize">{stack.key}</span>
-              </span>
-              <input
-                type="time"
-                value={settings.checkinTimes[stack.key]}
-                onChange={(e) => updateCheckinTime(stack.key, e.target.value)}
-                className="bg-surface-700 rounded-lg px-3 py-2 text-sm text-white border-none outline-none focus:ring-2 focus:ring-brand/50"
-              />
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Notifications */}
+      {/* Notifications & Schedule (unified) */}
       <NotificationSection />
 
       {/* Habit Management */}
@@ -670,12 +629,31 @@ function NotificationScheduleEditor() {
     return `${displayH}:${m.toString().padStart(2, "0")} ${period}`;
   }
 
+  // Derive checkinTimes from notification slots so dashboard/browser notifications stay in sync
+  function syncCheckinTimesFromSlots(slotList: NotificationSlot[]) {
+    const enabled = slotList.filter((s) => s.enabled).sort((a, b) => a.ukHour * 60 + a.ukMinute - (b.ukHour * 60 + b.ukMinute));
+    const morning = enabled.find((s) => s.ukHour < 12) || enabled[0];
+    const midday = enabled.find((s) => s.ukHour >= 12 && s.ukHour < 18);
+    const evening = enabled.find((s) => s.ukHour >= 18);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return {
+      morning: morning ? `${pad(morning.ukHour)}:${pad(morning.ukMinute)}` : "07:00",
+      midday: midday ? `${pad(midday.ukHour)}:${pad(midday.ukMinute)}` : "13:00",
+      evening: evening ? `${pad(evening.ukHour)}:${pad(evening.ukMinute)}` : "21:00",
+    };
+  }
+
+  function saveSlots(next: NotificationSlot[]) {
+    const settings = loadSettings();
+    settings.notificationSlots = next;
+    settings.checkinTimes = syncCheckinTimesFromSlots(next);
+    saveSettings(settings);
+  }
+
   function updateSlot(id: string, updates: Partial<NotificationSlot>) {
     setSlots((prev) => {
       const next = prev.map((s) => (s.id === id ? { ...s, ...updates } : s));
-      const settings = loadSettings();
-      settings.notificationSlots = next;
-      saveSettings(settings);
+      saveSlots(next);
       return next;
     });
   }
@@ -691,9 +669,7 @@ function NotificationScheduleEditor() {
     };
     setSlots((prev) => {
       const next = [...prev, newSlot].sort((a, b) => a.ukHour * 60 + a.ukMinute - (b.ukHour * 60 + b.ukMinute));
-      const settings = loadSettings();
-      settings.notificationSlots = next;
-      saveSettings(settings);
+      saveSlots(next);
       return next;
     });
   }
@@ -701,18 +677,14 @@ function NotificationScheduleEditor() {
   function removeSlot(id: string) {
     setSlots((prev) => {
       const next = prev.filter((s) => s.id !== id);
-      const settings = loadSettings();
-      settings.notificationSlots = next;
-      saveSettings(settings);
+      saveSlots(next);
       return next;
     });
   }
 
   function resetToDefault() {
     setSlots(DEFAULT_NOTIFICATION_SLOTS);
-    const settings = loadSettings();
-    settings.notificationSlots = DEFAULT_NOTIFICATION_SLOTS;
-    saveSettings(settings);
+    saveSlots(DEFAULT_NOTIFICATION_SLOTS);
   }
 
   async function syncSchedule() {
