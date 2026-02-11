@@ -270,6 +270,14 @@ export default function Home() {
             <NavTile icon="🎬" label="Wrap-Up" href="/wrap" compact />
             <NavTile icon="🌳" label="Tree" href="/tree" compact />
           </div>
+          {todayLog && (
+            <a
+              href={`/edit-log?date=${todayLog.date}`}
+              className="mt-2 block text-center text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors"
+            >
+              Edit today&apos;s log
+            </a>
+          )}
         </div>
 
         {/* Design — Shape your system */}

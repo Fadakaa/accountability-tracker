@@ -224,6 +224,61 @@ export function getPrevWeekLogs(state: LocalState): DayLog[] {
   return state.logs.filter((l) => l.date >= prevWeekStartStr && l.date < weekStartStr);
 }
 
+// ─── XP Recalculation (for edit-log) ─────────────────────
+
+export function recalculateDayXP(log: DayLog, allHabits: { id: string; slug: string; category: string; is_bare_minimum: boolean; is_active: boolean; unit: string | null }[]): number {
+  let xp = 0;
+
+  const binaryHabits = allHabits.filter((h) => h.category === "binary" && h.is_active);
+  const measuredHabits = allHabits.filter((h) => h.category === "measured" && h.is_active);
+  const badHabits = allHabits.filter((h) => h.category === "bad" && h.is_active);
+
+  // Binary XP
+  for (const habit of binaryHabits) {
+    const entry = log.entries[habit.id];
+    if (entry?.status === "done" && habit.is_bare_minimum) {
+      xp += 10; // BARE_MINIMUM_HABIT
+    }
+  }
+
+  // Measured XP
+  for (const habit of measuredHabits) {
+    const entry = log.entries[habit.id];
+    if (entry?.value && entry.value > 0) {
+      xp += 20; // MEASURED_AT_TARGET
+    }
+  }
+
+  // Bad habit XP
+  let anyBadOccurred = false;
+  for (const habit of badHabits) {
+    const entry = log.badEntries[habit.id];
+    if (entry?.occurred === false) {
+      xp += 15; // ZERO_BAD_HABIT_DAY
+    } else if (entry?.occurred === true) {
+      xp += 5; // LOG_BAD_HABIT_HONESTLY
+      anyBadOccurred = true;
+    }
+  }
+
+  // Bare minimum bonus
+  const allBareMinDone = binaryHabits
+    .filter((h) => h.is_bare_minimum)
+    .every((h) => log.entries[h.id]?.status === "done");
+
+  if (allBareMinDone && binaryHabits.filter((h) => h.is_bare_minimum).length > 0) {
+    xp += 50; // ALL_BARE_MINIMUM
+  }
+
+  // Perfect day
+  const allDone = binaryHabits.every((h) => log.entries[h.id]?.status === "done");
+  if (allDone && !anyBadOccurred && allBareMinDone) {
+    xp += 100; // PERFECT_DAY
+  }
+
+  return xp;
+}
+
 // ─── User Settings Storage ────────────────────────────────
 
 export interface HabitOverride {
