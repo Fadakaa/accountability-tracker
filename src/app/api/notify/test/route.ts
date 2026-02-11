@@ -17,11 +17,19 @@ export async function POST() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         topic: NTFY_TOPIC,
-        title: "Test notification",
-        message: "Notifications are working! You'll get check-in reminders at 7 AM, 1 PM, 9 PM, and an 11 PM warning.",
+        title: "✅ Test notification",
+        message: "Notifications are working! You'll get check-in reminders at 7 AM, 10 AM, 1 PM, 3 PM, 6 PM, and 9 PM.",
         tags: ["white_check_mark", "bell"],
         priority: 4,
-        click: `${APP_URL}/settings`,
+        click: `${APP_URL}/checkin`,
+        actions: [
+          {
+            action: "view",
+            label: "Open Check-in",
+            url: `${APP_URL}/checkin`,
+            clear: true,
+          },
+        ],
       }),
     });
 

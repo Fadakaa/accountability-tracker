@@ -13,6 +13,7 @@ import type { LocalState, DayLog, WrapReflection } from "@/lib/store";
 import { getHabitsWithHistory } from "@/lib/resolvedHabits";
 import { getFlameIcon, XP_VALUES } from "@/lib/habits";
 import type { Habit } from "@/types/database";
+import VoiceInput from "@/components/VoiceInput";
 
 // ─── Types ──────────────────────────────────────────────────
 interface WrapCard {
@@ -602,14 +603,23 @@ function buildCards(
         <p className="text-lg font-bold text-white leading-relaxed">
           {question}
         </p>
-        <textarea
-          value={reflectionAnswer}
-          onChange={(e) => setReflectionAnswer(e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-          placeholder="Type your answer..."
-          rows={4}
-          className="w-full bg-black/30 rounded-xl px-4 py-3 text-sm text-white border border-white/10 outline-none resize-none focus:ring-2 focus:ring-white/20 placeholder:text-white/30"
-        />
+        <div className="w-full">
+          <div className="flex justify-end mb-2">
+            <VoiceInput
+              onTranscript={(text) => setReflectionAnswer(reflectionAnswer ? `${reflectionAnswer} ${text}` : text)}
+              className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 text-white/70"
+              label="🎤 Dictate"
+            />
+          </div>
+          <textarea
+            value={reflectionAnswer}
+            onChange={(e) => setReflectionAnswer(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            placeholder="Type or tap 🎤 to dictate..."
+            rows={4}
+            className="w-full bg-black/30 rounded-xl px-4 py-3 text-sm text-white border border-white/10 outline-none resize-none focus:ring-2 focus:ring-white/20 placeholder:text-white/30"
+          />
+        </div>
         <p className="text-xs text-slate-500">
           Your response is saved and referenced in future reviews
         </p>
@@ -649,9 +659,16 @@ function buildCards(
         )}
 
         <div className="space-y-2 w-full">
-          <p className="text-sm text-purple-200/80">
-            One focus for next week:
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-purple-200/80">
+              One focus for next week:
+            </p>
+            <VoiceInput
+              onTranscript={(text) => setForwardIntention(forwardIntention ? `${forwardIntention} ${text}` : text)}
+              className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 text-white/70"
+              label="🎤"
+            />
+          </div>
           <input
             type="text"
             value={forwardIntention}

@@ -121,6 +121,7 @@ export async function GET(request: Request) {
             action: "view",
             label: "Open Check-in",
             url: `${APP_URL}/checkin`,
+            clear: true,
           },
         ],
       };

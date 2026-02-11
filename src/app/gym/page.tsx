@@ -6,6 +6,7 @@ import type { GymSessionLocal, GymExerciseLocal, GymSetLocal } from "@/lib/store
 import type { TrainingType } from "@/types/database";
 import { XP_VALUES } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
+import VoiceInput from "@/components/VoiceInput";
 
 // ─── Constants ──────────────────────────────────────────────
 const MUSCLE_GROUPS = ["Chest", "Back", "Shoulders", "Arms", "Legs", "Core", "Full Body"];
@@ -430,13 +431,20 @@ export default function GymPage() {
 
         {/* Notes */}
         <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
-          <label className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-2 block">
-            Session Notes
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
+              Session Notes
+            </label>
+            <VoiceInput
+              onTranscript={(text) => setNotes((prev) => prev ? `${prev} ${text}` : text)}
+              className="px-3 py-1.5 text-xs"
+              label="🎤 Voice"
+            />
+          </div>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="How did the session feel? Any PRs?"
+            placeholder="How did the session feel? Any PRs? Tap 🎤 to dictate."
             rows={3}
             className="w-full bg-surface-700 rounded-lg px-4 py-3 text-sm text-white border-none outline-none resize-none focus:ring-2 focus:ring-brand/50"
           />

@@ -636,7 +636,8 @@ function NotificationSection() {
             +13 min → +8 min → +5 min → +3 min → +1 min
           </div>
           <p className="text-[10px] text-neutral-500 mt-1">
-            30 minutes of increasingly urgent reminders until you log it
+            Then <span className="text-missed font-semibold">every minute for 30 more minutes</span> with rotating motivational messages.
+            Each notification tells you when the next one is coming. Total: ~60 minutes of relentless reminders.
           </p>
         </div>
 
