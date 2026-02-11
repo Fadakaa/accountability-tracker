@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#ea580c"/>
+      <stop offset="50%" style="stop-color:#f97316"/>
+      <stop offset="100%" style="stop-color:#fbbf24"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="192" height="192" rx="40" ry="40" fill="url(#bg)"/>
+  <text x="96" y="118" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="96" font-weight="700" fill="url(#flame)" text-anchor="middle" filter="url(#glow)">A</text>
+  <circle cx="130" cy="58" r="14" fill="none" stroke="#f97316" stroke-width="3" opacity="0.5"/>
+  <circle cx="130" cy="58" r="6" fill="#f97316" opacity="0.7"/>
+</svg>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#ea580c"/>
+      <stop offset="50%" style="stop-color:#f97316"/>
+      <stop offset="100%" style="stop-color:#fbbf24"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" ry="7" fill="url(#bg)"/>
+  <text x="16" y="23" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="700" fill="url(#flame)" text-anchor="middle">A</text>
+</svg>
