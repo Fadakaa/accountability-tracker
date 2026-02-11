@@ -8,8 +8,12 @@ import {
   getPrevWeekLogs,
   getLevelForXP,
   loadGymSessions,
+  addAdminTask,
+  loadAdminTasks,
+  getTomorrowDate,
+  removeAdminTask,
 } from "@/lib/store";
-import type { LocalState, DayLog, WrapReflection } from "@/lib/store";
+import type { LocalState, DayLog, WrapReflection, AdminTask } from "@/lib/store";
 import { getHabitsWithHistory } from "@/lib/resolvedHabits";
 import { getFlameIcon, XP_VALUES } from "@/lib/habits";
 import type { Habit } from "@/types/database";
@@ -17,7 +21,7 @@ import VoiceInput from "@/components/VoiceInput";
 
 // ─── Types ──────────────────────────────────────────────────
 interface WrapCard {
-  type: "win" | "stat" | "streak" | "honesty" | "bad" | "insight" | "reflection" | "forward";
+  type: "win" | "stat" | "streak" | "honesty" | "bad" | "insight" | "reflection" | "plan-tomorrow" | "forward";
   bg: string; // tailwind gradient / color classes
   content: React.ReactNode;
 }
@@ -45,14 +49,29 @@ export default function WrapPage() {
   const [reflectionAnswer, setReflectionAnswer] = useState("");
   const [forwardIntention, setForwardIntention] = useState("");
   const [completed, setCompleted] = useState(false);
+  const [tomorrowTasks, setTomorrowTasks] = useState<AdminTask[]>([]);
+  const [newTomorrowText, setNewTomorrowText] = useState("");
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
 
   useEffect(() => {
     setState(loadState());
+    setTomorrowTasks(loadAdminTasks(getTomorrowDate()));
   }, []);
 
-  const cards = state ? buildCards(state, reflectionAnswer, setReflectionAnswer, forwardIntention, setForwardIntention) : [];
+  function handleAddTomorrowTask() {
+    if (!newTomorrowText.trim()) return;
+    addAdminTask(newTomorrowText.trim(), "planned", getTomorrowDate());
+    setTomorrowTasks(loadAdminTasks(getTomorrowDate()));
+    setNewTomorrowText("");
+  }
+
+  function handleRemoveTomorrowTask(taskId: string) {
+    removeAdminTask(taskId);
+    setTomorrowTasks(loadAdminTasks(getTomorrowDate()));
+  }
+
+  const cards = state ? buildCards(state, reflectionAnswer, setReflectionAnswer, forwardIntention, setForwardIntention, tomorrowTasks, newTomorrowText, setNewTomorrowText, handleAddTomorrowTask, handleRemoveTomorrowTask) : [];
 
   const goNext = useCallback(() => {
     if (currentCard < cards.length - 1) {
@@ -126,6 +145,9 @@ export default function WrapPage() {
     if (reflectionAnswer.trim()) newState.totalXp += 25;
     if (forwardIntention.trim()) newState.totalXp += 25;
 
+    // Bonus XP for planning tomorrow's admin tasks
+    if (tomorrowTasks.length > 0) newState.totalXp += XP_VALUES.PLAN_TOMORROW_SET;
+
     saveState(newState);
     setCompleted(true);
   }
@@ -134,7 +156,7 @@ export default function WrapPage() {
 
   // Completed screen
   if (completed) {
-    const bonusXp = 50 + (reflectionAnswer.trim() ? 25 : 0) + (forwardIntention.trim() ? 25 : 0);
+    const bonusXp = 50 + (reflectionAnswer.trim() ? 25 : 0) + (forwardIntention.trim() ? 25 : 0) + (tomorrowTasks.length > 0 ? XP_VALUES.PLAN_TOMORROW_SET : 0);
     return (
       <div className="flex flex-col items-center justify-center min-h-screen px-6 text-center">
         <div className="text-6xl mb-4">🎉</div>
@@ -234,6 +256,11 @@ function buildCards(
   setReflectionAnswer: (v: string) => void,
   forwardIntention: string,
   setForwardIntention: (v: string) => void,
+  tomorrowTasks: AdminTask[],
+  newTomorrowText: string,
+  setNewTomorrowText: (v: string) => void,
+  onAddTomorrowTask: () => void,
+  onRemoveTomorrowTask: (taskId: string) => void,
 ): WrapCard[] {
   const cards: WrapCard[] = [];
   const weekLogs = getWeekLogs(state);
@@ -627,7 +654,64 @@ function buildCards(
     ),
   });
 
-  // ── Card 10: Forward Intention ──
+  // ── Card 10: Plan Tomorrow ──
+  cards.push({
+    type: "plan-tomorrow",
+    bg: "bg-gradient-to-b from-slate-800 via-blue-950 to-slate-900",
+    content: (
+      <div className="text-center space-y-5 w-full max-w-sm">
+        <div className="text-5xl">📋</div>
+        <h2 className="text-2xl font-black text-white">
+          What&apos;s on the plate tomorrow?
+        </h2>
+        <p className="text-sm text-blue-300/60">
+          Add admin tasks — these will appear in tomorrow&apos;s check-in.
+        </p>
+
+        {/* Task list */}
+        {tomorrowTasks.length > 0 && (
+          <div className="space-y-2 text-left">
+            {tomorrowTasks.map((task) => (
+              <div key={task.id} className="flex items-center gap-2 bg-white/5 rounded-lg px-3 py-2">
+                <span className="text-sm text-white flex-1">{task.title}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemoveTomorrowTask(task.id); }}
+                  className="text-white/30 hover:text-red-400 text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input */}
+        <div className="flex items-center gap-2 w-full">
+          <input
+            type="text"
+            value={newTomorrowText}
+            onChange={(e) => setNewTomorrowText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onAddTomorrowTask(); }}
+            onClick={(e) => e.stopPropagation()}
+            placeholder="e.g. Reply to tax email..."
+            className="flex-1 bg-black/30 rounded-xl px-4 py-3 text-sm text-white border border-white/10 outline-none focus:ring-2 focus:ring-blue-500/30 placeholder:text-white/30"
+          />
+          <button
+            onClick={(e) => { e.stopPropagation(); onAddTomorrowTask(); }}
+            className="bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 rounded-xl px-4 py-3 text-sm font-medium transition-colors"
+          >
+            Add
+          </button>
+        </div>
+
+        <p className="text-xs text-blue-300/30 italic">
+          Skip if nothing planned — you can always add during the day.
+        </p>
+      </div>
+    ),
+  });
+
+  // ── Card 11: Forward Intention ──
   const topStreaksForward = streakEntries.slice(0, 3);
   cards.push({
     type: "forward",

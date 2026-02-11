@@ -7,6 +7,7 @@ const STORAGE_KEY = "accountability-tracker";
 const GYM_STORAGE_KEY = "accountability-gym";
 const SETTINGS_KEY = "accountability-settings";
 const DEFERRED_KEY = "accountability-deferred";
+const ADMIN_KEY = "accountability-admin";
 
 // ─── Deferred Habits (temporary reschedule for today only) ───
 export interface DeferredHabit {
@@ -56,10 +57,104 @@ export function isDeferredAway(habitId: string): boolean {
   return loadDeferred().some((d) => d.habitId === habitId);
 }
 
+// ─── Admin Tasks (daily to-do items) ─────────────────────
+export interface AdminTask {
+  id: string;
+  title: string;
+  completed: boolean;
+  date: string;           // YYYY-MM-DD — the day this task is for
+  source: "adhoc" | "planned"; // planned = from Plan Tomorrow, adhoc = added during the day
+  completedAt: string | null;
+  createdAt: string;
+}
+
+export function loadAdminTasks(date?: string): AdminTask[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(ADMIN_KEY);
+    if (!raw) return [];
+    const all: AdminTask[] = JSON.parse(raw);
+    const target = date ?? getToday();
+    return all.filter((t) => t.date === target);
+  } catch {
+    return [];
+  }
+}
+
+function loadAllAdminTasks(): AdminTask[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(ADMIN_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function saveAllAdminTasks(tasks: AdminTask[]): void {
+  // Auto-clean tasks older than 7 days
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 7);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const cleaned = tasks.filter((t) => t.date >= cutoffStr);
+  localStorage.setItem(ADMIN_KEY, JSON.stringify(cleaned));
+}
+
+export function addAdminTask(title: string, source: "adhoc" | "planned", date?: string): AdminTask {
+  const all = loadAllAdminTasks();
+  const task: AdminTask = {
+    id: `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    title: title.trim(),
+    completed: false,
+    date: date ?? getToday(),
+    source,
+    completedAt: null,
+    createdAt: new Date().toISOString(),
+  };
+  all.push(task);
+  saveAllAdminTasks(all);
+  return task;
+}
+
+export function toggleAdminTask(taskId: string): void {
+  const all = loadAllAdminTasks();
+  const task = all.find((t) => t.id === taskId);
+  if (task) {
+    task.completed = !task.completed;
+    task.completedAt = task.completed ? new Date().toISOString() : null;
+    saveAllAdminTasks(all);
+  }
+}
+
+export function removeAdminTask(taskId: string): void {
+  const all = loadAllAdminTasks();
+  saveAllAdminTasks(all.filter((t) => t.id !== taskId));
+}
+
+export function getAdminSummary(date?: string): { total: number; completed: number } {
+  const tasks = loadAdminTasks(date);
+  return {
+    total: tasks.length,
+    completed: tasks.filter((t) => t.completed).length,
+  };
+}
+
+export function getTomorrowDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 export interface DayLog {
   date: string; // YYYY-MM-DD
   entries: Record<string, { status: LogStatus; value: number | null }>;
   badEntries: Record<string, { occurred: boolean; durationMinutes: number | null }>;
+  adminSummary?: {
+    total: number;
+    completed: number;
+    tasks: { title: string; completed: boolean }[];
+  };
   xpEarned: number;
   bareMinimumMet: boolean;
   submittedAt: string;

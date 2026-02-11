@@ -1,20 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState, getTodayLog, getLevelForXP, loadSettings, recalculateStreaks, saveState } from "@/lib/store";
-import type { LocalState } from "@/lib/store";
+import { loadState, getTodayLog, getLevelForXP, loadSettings, recalculateStreaks, saveState, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask } from "@/lib/store";
+import type { LocalState, AdminTask } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
-import { startNotificationScheduler, getNotificationPermission, syncScheduleToServiceWorker } from "@/lib/notifications";
+import { startNotificationScheduler, getNotificationPermission, syncScheduleToServiceWorker, syncCompletionToServiceWorker } from "@/lib/notifications";
 import NotificationBanner from "@/components/NotificationBanner";
 import LevelSuggestionBanner from "@/components/LevelSuggestionBanner";
 
 export default function Home() {
   const [state, setState] = useState<LocalState | null>(null);
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
+  const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
+  const [newAdminText, setNewAdminText] = useState("");
 
   useEffect(() => {
     // Load state and recalculate streaks from log history (source of truth)
@@ -28,9 +30,11 @@ export default function Home() {
     saveState(loaded);
     setState(loaded);
     setWeakHabits(getWeakHabits());
+    setAdminTasks(loadAdminTasks());
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();
       syncScheduleToServiceWorker();
+      syncCompletionToServiceWorker();
     }
   }, []);
 
@@ -190,6 +194,71 @@ export default function Home() {
         <ProgressRing label="Measured" done={measuredDone} total={measuredHabits.length} color="#3b82f6" />
         <ProgressRing label="Stretch" done={stretchDone} total={stretchHabits.length} color="#eab308" />
       </section>
+
+      {/* Admin Tasks — interactive inline card */}
+      {adminTasks.length > 0 && (
+        <section className="rounded-xl bg-surface-800 border border-blue-900/30 p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
+              📋 Admin Today
+            </h2>
+            <span className="text-xs text-blue-400 font-bold">
+              {adminTasks.filter((t) => t.completed).length}/{adminTasks.length}
+            </span>
+          </div>
+          {/* Progress bar */}
+          <div className="w-full h-1.5 rounded-full bg-surface-700 mb-3">
+            <div
+              className="h-full rounded-full bg-blue-500 transition-all"
+              style={{ width: `${adminTasks.length > 0 ? (adminTasks.filter((t) => t.completed).length / adminTasks.length) * 100 : 0}%` }}
+            />
+          </div>
+          <div className="space-y-1.5">
+            {adminTasks.slice(0, 5).map((task) => (
+              <div key={task.id} className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    toggleAdminTask(task.id);
+                    setAdminTasks(loadAdminTasks());
+                  }}
+                  className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold shrink-0 transition-colors ${
+                    task.completed
+                      ? "bg-done/20 text-done"
+                      : "bg-surface-600 text-neutral-700"
+                  }`}
+                >
+                  {task.completed ? "✓" : ""}
+                </button>
+                <span className={`text-xs flex-1 ${task.completed ? "line-through text-neutral-600" : "text-neutral-300"}`}>
+                  {task.title}
+                </span>
+              </div>
+            ))}
+            {adminTasks.length > 5 && (
+              <a href="/checkin" className="text-[10px] text-blue-500 hover:text-blue-400">
+                +{adminTasks.length - 5} more — view in check-in
+              </a>
+            )}
+          </div>
+          {/* Inline add */}
+          <div className="flex items-center gap-2 mt-3 pt-2 border-t border-surface-700">
+            <input
+              type="text"
+              value={newAdminText}
+              onChange={(e) => setNewAdminText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newAdminText.trim()) {
+                  addAdminTask(newAdminText.trim(), "adhoc");
+                  setAdminTasks(loadAdminTasks());
+                  setNewAdminText("");
+                }
+              }}
+              placeholder="+ Add task..."
+              className="flex-1 bg-transparent text-xs text-white outline-none placeholder:text-neutral-600"
+            />
+          </div>
+        </section>
+      )}
 
       {/* Top Streaks — Dynamic */}
       <section className="mb-6">

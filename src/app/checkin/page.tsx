@@ -2,11 +2,12 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
-import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred } from "@/lib/store";
+import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask, getAdminSummary } from "@/lib/store";
+import type { DayLog, DeferredHabit, AdminTask } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
-import { startEscalation, resolveEscalation, resolveAllEscalations } from "@/lib/notifications";
-import type { DayLog, DeferredHabit } from "@/lib/store";
+import { startEscalation, resolveEscalation, resolveAllEscalations, syncCompletionToServiceWorker } from "@/lib/notifications";
+import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -27,6 +28,8 @@ type SubmissionResult = {
   streakUpdates: { name: string; icon: string; days: number }[];
   bareMinimumMet: boolean;
   quote: string;
+  adminDone?: number;
+  adminTotal?: number;
 };
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -68,6 +71,11 @@ export default function CheckinPage() {
   // Sprint context — affects which habits are shown and how
   const sprint = useMemo(() => getSprintContext(), []);
 
+  // Admin tasks state
+  const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
+  const [newAdminText, setNewAdminText] = useState("");
+  const [showAdminInput, setShowAdminInput] = useState(false);
+
   // Defer modal state — shown when user clicks "Later" on a binary habit
   const [deferModalHabitId, setDeferModalHabitId] = useState<string | null>(null);
 
@@ -80,6 +88,7 @@ export default function CheckinPage() {
   useEffect(() => {
     const state = loadState();
     setStreaks(state.streaks);
+    setAdminTasks(loadAdminTasks());
 
     // Check sessionStorage for day-level dismissal
     const dismissKey = `lock-dismissed-${getToday()}`;
@@ -219,7 +228,7 @@ export default function CheckinPage() {
   // Split into categories — for intense/critical, separate bare minimum from extras
   // Also filter out habits that have been deferred to a later stack
   const allBinary = stackHabits.filter((h) => h.category === "binary" && !isDeferredAway(h.id));
-  const allMeasured = stackHabits.filter((h) => h.category === "measured");
+  const allMeasured = stackHabits.filter((h) => h.category === "measured" && h.id !== ADMIN_HABIT_ID);
   const badHabits = stackHabits.filter((h) => h.category === "bad");
 
   // Load habits that were deferred TO this stack from an earlier stack
@@ -425,8 +434,12 @@ export default function CheckinPage() {
       if (entry.status === "done") {
         // Only award XP if not already "done" today (prevents double XP on re-submit)
         const alreadyDone = todayLogBefore?.entries[habit.id]?.status === "done";
-        if (!alreadyDone && habit.is_bare_minimum) {
-          xp += XP_VALUES.BARE_MINIMUM_HABIT;
+        if (!alreadyDone) {
+          if (habit.is_bare_minimum) {
+            xp += XP_VALUES.BARE_MINIMUM_HABIT;
+          } else {
+            xp += XP_VALUES.STRETCH_HABIT;
+          }
         }
       }
     }
@@ -449,6 +462,17 @@ export default function CheckinPage() {
       } else if (entry?.occurred === true) {
         xp += XP_VALUES.LOG_BAD_HABIT_HONESTLY;
         anyBadOccurred = true;
+      }
+    }
+
+    // Admin tasks XP — compute from admin store
+    const adminSummary = getAdminSummary();
+    if (adminSummary.total > 0) {
+      // XP per completed task
+      xp += adminSummary.completed * XP_VALUES.ADMIN_TASK_CLEARED;
+      // Bonus for clearing everything
+      if (adminSummary.completed === adminSummary.total) {
+        xp += XP_VALUES.ADMIN_ALL_CLEARED;
       }
     }
 
@@ -490,6 +514,18 @@ export default function CheckinPage() {
       badRecord[id] = { occurred: e.occurred ?? false, durationMinutes: e.durationMinutes };
     });
 
+    // Write admin task measured value into entries
+    if (adminSummary.total > 0) {
+      entryRecord[ADMIN_HABIT_ID] = { status: "done", value: adminSummary.completed };
+    }
+
+    // Build admin snapshot for historical record
+    const adminSnapshot = adminSummary.total > 0 ? {
+      total: adminSummary.total,
+      completed: adminSummary.completed,
+      tasks: loadAdminTasks().map((t) => ({ title: t.title, completed: t.completed })),
+    } : undefined;
+
     // Merge with existing today log (other stacks)
     const existingLog = state.logs.find((l) => l.date === today);
     if (existingLog) {
@@ -498,11 +534,13 @@ export default function CheckinPage() {
       existingLog.xpEarned += xp;
       existingLog.bareMinimumMet = bareMinDone;
       existingLog.submittedAt = new Date().toISOString();
+      if (adminSnapshot) existingLog.adminSummary = adminSnapshot;
     } else {
       state.logs.push({
         date: today,
         entries: entryRecord,
         badEntries: badRecord,
+        adminSummary: adminSnapshot,
         xpEarned: xp,
         bareMinimumMet: bareMinDone,
         submittedAt: new Date().toISOString(),
@@ -539,6 +577,9 @@ export default function CheckinPage() {
 
     saveState(state);
 
+    // Tell service worker which stacks are complete (suppresses future notifications)
+    syncCompletionToServiceWorker();
+
     // Resolve all active escalations for submitted habits
     for (const habit of binaryHabits) {
       const entry = entries.get(habit.id);
@@ -566,6 +607,8 @@ export default function CheckinPage() {
       streakUpdates: streakUpdates.slice(0, 4),
       bareMinimumMet: bareMinDone,
       quote: getContextualQuote(quoteContext).text,
+      adminDone: adminSummary.completed,
+      adminTotal: adminSummary.total,
     });
     setPhase("result");
   }
@@ -607,6 +650,16 @@ export default function CheckinPage() {
             </div>
           ))}
         </div>
+
+        {/* Admin Summary */}
+        {result.adminTotal != null && result.adminTotal > 0 && (
+          <div className="w-full max-w-sm rounded-lg bg-blue-950/30 border border-blue-900/30 px-4 py-3 mb-4">
+            <span className="text-sm text-blue-300">
+              📋 Admin: {result.adminDone}/{result.adminTotal} tasks cleared
+              {result.adminDone === result.adminTotal && " ✨"}
+            </span>
+          </div>
+        )}
 
         {/* Motivational Quote */}
         <div className="max-w-xs text-neutral-400 text-sm italic leading-relaxed mb-10">
@@ -1001,6 +1054,109 @@ export default function CheckinPage() {
             ))}
           </div>
         </section>
+      )}
+
+      {/* ─── Admin Tasks (stack-independent) ─────────────── */}
+      {(adminTasks.length > 0 || showAdminInput) && (
+        <section className="mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
+              📋 Admin ({adminTasks.filter((t) => t.completed).length}/{adminTasks.length})
+            </h2>
+            {!showAdminInput && (
+              <button
+                onClick={() => setShowAdminInput(true)}
+                className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+              >
+                + Add
+              </button>
+            )}
+          </div>
+          <div className="rounded-xl bg-surface-800 border border-blue-900/30 p-3 space-y-1.5">
+            {adminTasks.map((task) => (
+              <div key={task.id} className="flex items-center gap-2 group">
+                <button
+                  onClick={() => {
+                    toggleAdminTask(task.id);
+                    setAdminTasks(loadAdminTasks());
+                  }}
+                  className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 transition-colors ${
+                    task.completed
+                      ? "bg-done/20 text-done"
+                      : "bg-surface-700 text-neutral-600 hover:text-neutral-400"
+                  }`}
+                >
+                  {task.completed ? "✓" : ""}
+                </button>
+                <span className={`text-sm flex-1 ${task.completed ? "line-through text-neutral-600" : "text-neutral-300"}`}>
+                  {task.title}
+                </span>
+                {task.source === "planned" && !task.completed && (
+                  <span className="text-[9px] text-blue-500/60 shrink-0">planned</span>
+                )}
+                <button
+                  onClick={() => {
+                    removeAdminTask(task.id);
+                    setAdminTasks(loadAdminTasks());
+                  }}
+                  className="text-neutral-700 hover:text-missed text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {showAdminInput && (
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  type="text"
+                  value={newAdminText}
+                  onChange={(e) => setNewAdminText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newAdminText.trim()) {
+                      addAdminTask(newAdminText.trim(), "adhoc");
+                      setAdminTasks(loadAdminTasks());
+                      setNewAdminText("");
+                    }
+                  }}
+                  placeholder="Add a task..."
+                  autoFocus
+                  className="flex-1 bg-surface-700 rounded-lg px-3 py-1.5 text-sm text-white border-none outline-none focus:ring-1 focus:ring-blue-500/50 placeholder:text-neutral-600"
+                />
+                <button
+                  onClick={() => {
+                    if (newAdminText.trim()) {
+                      addAdminTask(newAdminText.trim(), "adhoc");
+                      setAdminTasks(loadAdminTasks());
+                      setNewAdminText("");
+                    }
+                  }}
+                  className="text-xs text-blue-400 hover:text-blue-300 font-medium px-2"
+                >
+                  Add
+                </button>
+                <button
+                  onClick={() => { setShowAdminInput(false); setNewAdminText(""); }}
+                  className="text-xs text-neutral-600 hover:text-neutral-400 px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            {adminTasks.length === 0 && !showAdminInput && (
+              <p className="text-xs text-neutral-600 text-center py-2">No admin tasks today</p>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Quick add admin button when no tasks exist */}
+      {adminTasks.length === 0 && !showAdminInput && (
+        <button
+          onClick={() => setShowAdminInput(true)}
+          className="w-full mb-6 py-2.5 rounded-xl border border-dashed border-surface-600 text-xs text-neutral-600 hover:text-blue-400 hover:border-blue-900/40 transition-colors"
+        >
+          📋 + Add admin task
+        </button>
       )}
 
       {/* Bad Habit Cards */}

@@ -28,10 +28,13 @@ export const HABITS: Habit[] = [
   { id: "20000000-0000-0000-0000-000000000006", user_id: USER_ID, name: "Environment Score", slug: "environment-score", category: "measured", stack: "midday",  is_bare_minimum: false, unit: "1-5",     icon: "🏡", sort_order: 17, is_active: true, current_level: 1, created_at: "", updated_at: "" },
   { id: "20000000-0000-0000-0000-000000000007", user_id: USER_ID, name: "Energy Level",      slug: "energy-level",      category: "measured", stack: "evening", is_bare_minimum: false, unit: "1-5",     icon: "⚡", sort_order: 18, is_active: true, current_level: 1, created_at: "", updated_at: "" },
 
+  // Admin — special measured habit auto-populated from admin task store
+  { id: "20000000-0000-0000-0000-000000000010", user_id: USER_ID, name: "Admin Tasks",       slug: "admin-tasks",       category: "measured", stack: "evening", is_bare_minimum: false, unit: "tasks",   icon: "📋", sort_order: 19, is_active: true, current_level: 1, created_at: "", updated_at: "" },
+
   // Bad habits
-  { id: "30000000-0000-0000-0000-000000000001", user_id: USER_ID, name: "League of Legends", slug: "league",  category: "bad", stack: "evening", is_bare_minimum: false, unit: "minutes", icon: "🎮", sort_order: 19, is_active: true, current_level: 1, created_at: "", updated_at: "" },
-  { id: "30000000-0000-0000-0000-000000000002", user_id: USER_ID, name: "Plates Not Washed", slug: "plates",  category: "bad", stack: "evening", is_bare_minimum: false, unit: null,      icon: "🍽️", sort_order: 20, is_active: true, current_level: 1, created_at: "", updated_at: "" },
-  { id: "30000000-0000-0000-0000-000000000003", user_id: USER_ID, name: "Hygiene Delayed",   slug: "hygiene", category: "bad", stack: "evening", is_bare_minimum: false, unit: null,      icon: "🚿", sort_order: 21, is_active: true, current_level: 1, created_at: "", updated_at: "" },
+  { id: "30000000-0000-0000-0000-000000000001", user_id: USER_ID, name: "League of Legends", slug: "league",  category: "bad", stack: "evening", is_bare_minimum: false, unit: "minutes", icon: "🎮", sort_order: 20, is_active: true, current_level: 1, created_at: "", updated_at: "" },
+  { id: "30000000-0000-0000-0000-000000000002", user_id: USER_ID, name: "Plates Not Washed", slug: "plates",  category: "bad", stack: "evening", is_bare_minimum: false, unit: null,      icon: "🍽️", sort_order: 21, is_active: true, current_level: 1, created_at: "", updated_at: "" },
+  { id: "30000000-0000-0000-0000-000000000003", user_id: USER_ID, name: "Hygiene Delayed",   slug: "hygiene", category: "bad", stack: "evening", is_bare_minimum: false, unit: null,      icon: "🚿", sort_order: 22, is_active: true, current_level: 1, created_at: "", updated_at: "" },
 ];
 
 export const HABIT_LEVELS: HabitLevel[] = [
@@ -227,6 +230,7 @@ export function getFlameIcon(days: number): string {
 // XP values from spec
 export const XP_VALUES = {
   BARE_MINIMUM_HABIT: 10,
+  STRETCH_HABIT: 15,
   MEASURED_AT_TARGET: 20,
   MEASURED_EXCEED: 30,
   LOG_BAD_HABIT_HONESTLY: 5,
@@ -236,6 +240,11 @@ export const XP_VALUES = {
   STREAK_MILESTONE: 200,
   LEVEL_UP_ACCEPTED: 150,
   GYM_FULL_DETAIL: 25,
+  ADMIN_TASK_CLEARED: 5,
+  ADMIN_ALL_CLEARED: 25,
+  PLAN_TOMORROW_SET: 10,
   WEEKLY_TARGET_MET: 300,
   MONTHLY_TARGET_MET: 1000,
 } as const;
+
+export const ADMIN_HABIT_ID = "20000000-0000-0000-0000-000000000010";
