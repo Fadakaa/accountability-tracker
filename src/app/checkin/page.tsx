@@ -404,9 +404,9 @@ export default function CheckinPage() {
     if (!existingLog) return;
     if (stackHabits.length === 0) return;
 
-    // Check every habit type in this stack
+    // Check required habit types in this stack
+    // Must match canSubmit logic: binary + bad are required, measured are optional
     const stackBinary = stackHabits.filter((h) => h.category === "binary");
-    const stackMeasured = stackHabits.filter((h) => h.category === "measured");
     const stackBad = stackHabits.filter((h) => h.category === "bad");
 
     // Binary: any status (done/missed/later) means it was submitted
@@ -415,19 +415,16 @@ export default function CheckinPage() {
       return entry && entry.status != null;
     });
 
-    // Measured: has a value logged
-    const allMeasuredSubmitted = stackMeasured.every((h) => {
-      const entry = existingLog.entries[h.id];
-      return entry && entry.value != null;
-    });
-
     // Bad: occurred is set (true or false)
     const allBadSubmitted = stackBad.every((h) => {
       const entry = existingLog.badEntries[h.id];
       return entry && entry.occurred != null;
     });
 
-    if (allBinarySubmitted && allMeasuredSubmitted && allBadSubmitted) {
+    // Need at least one habit type answered (avoid false positive on empty stacks)
+    const hasRequiredHabits = stackBinary.length > 0 || stackBad.length > 0;
+
+    if (hasRequiredHabits && allBinarySubmitted && allBadSubmitted) {
       // Build summary stats
       let done = 0, missed = 0, later = 0, badClean = 0, badSlipped = 0;
       for (const h of stackBinary) {
