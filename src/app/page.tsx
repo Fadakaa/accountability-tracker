@@ -8,6 +8,7 @@ import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
+import { isDayFullyComplete, isDayPerfect } from "@/lib/dayComplete";
 import { startNotificationScheduler, getNotificationPermission } from "@/lib/notifications";
 import NotificationBanner from "@/components/NotificationBanner";
 import LevelSuggestionBanner from "@/components/LevelSuggestionBanner";
@@ -253,7 +254,15 @@ export default function Home() {
             Execute
           </h3>
           <div className="grid grid-cols-3 gap-2">
-            <NavTile icon="📝" label="Check In" href="/checkin" accent />
+            {state && isDayFullyComplete(state) ? (
+              <NavTile
+                icon={isDayPerfect(state) ? "🌟" : "✅"}
+                label="Day Done"
+                href={`/edit-log?date=${new Date().toISOString().slice(0, 10)}`}
+              />
+            ) : (
+              <NavTile icon="📝" label="Check In" href="/checkin" accent />
+            )}
             <NavTile icon="🏋️" label="Gym Log" href="/gym" />
             <NavTile icon="🚀" label="Sprint" href="/sprint" />
           </div>

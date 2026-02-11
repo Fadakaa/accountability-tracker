@@ -6,6 +6,8 @@ import { loadState, saveState, getToday, getLevelForXP, getSprintContext } from 
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
 import { startEscalation, resolveEscalation, resolveAllEscalations } from "@/lib/notifications";
+import { isDayFullyComplete, getDayStats } from "@/lib/dayComplete";
+import DayCompleteScreen from "@/components/DayCompleteScreen";
 import type { DayLog } from "@/lib/store";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
 
@@ -62,6 +64,8 @@ export default function CheckinPage() {
   const [badEntries, setBadEntries] = useState<Map<string, BadHabitEntry>>(new Map());
   // Submission result
   const [result, setResult] = useState<SubmissionResult | null>(null);
+  // Day complete overlay
+  const [dayCompleteStats, setDayCompleteStats] = useState<ReturnType<typeof getDayStats> & { bareMinimumStreak: number } | null>(null);
   // Streaks from local store
   const [streaks, setStreaks] = useState<Record<string, number>>({});
 
@@ -304,6 +308,12 @@ export default function CheckinPage() {
 
     saveState(state);
 
+    // Check if entire day is now complete
+    if (isDayFullyComplete(state)) {
+      const stats = getDayStats(state);
+      setDayCompleteStats({ ...stats, bareMinimumStreak: state.bareMinimumStreak });
+    }
+
     // Resolve all active escalations for submitted habits
     for (const habit of binaryHabits) {
       const entry = entries.get(habit.id);
@@ -324,6 +334,23 @@ export default function CheckinPage() {
       quote: getContextualQuote(quoteContext).text,
     });
     setPhase("result");
+  }
+
+  // ─── Day Complete Overlay ──────────────────────────────────
+  if (dayCompleteStats && phase === "result") {
+    return (
+      <>
+        <DayCompleteScreen
+          habitsCompleted={dayCompleteStats.habitsCompleted}
+          habitsTotal={dayCompleteStats.habitsTotal}
+          xpEarned={dayCompleteStats.xpEarned}
+          bareMinimumMet={dayCompleteStats.bareMinimumMet}
+          isPerfect={dayCompleteStats.isPerfect}
+          bareMinimumStreak={dayCompleteStats.bareMinimumStreak}
+          onDismiss={() => { window.location.href = "/"; }}
+        />
+      </>
+    );
   }
 
   // ─── Result Screen ─────────────────────────────────────────
