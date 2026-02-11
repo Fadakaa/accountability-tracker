@@ -1,47 +1,65 @@
-// Vercel Cron Job — sends check-in reminders via ntfy.sh
-// Runs at 07:00, 13:00, 21:00, and 23:00 UTC (configured in vercel.json)
-// Protected by CRON_SECRET to prevent unauthorized calls
+// Vercel Cron Job — sends all daily check-in reminders via ntfy.sh
+// Runs once daily at 6 AM UTC (vercel.json). Schedules all 4 notifications
+// using ntfy's built-in "delay" feature so they arrive at the right UK times.
+// Protected by CRON_SECRET to prevent unauthorized calls.
 
 import { NextResponse } from "next/server";
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC;
 const CRON_SECRET = process.env.CRON_SECRET;
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://accountability-tracker-sandy.vercel.app";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ||
+  "https://accountability-tracker-sandy.vercel.app";
 
-// Notification messages per time slot
-interface NotifMessage {
+interface ScheduledNotif {
+  slot: string;
+  ukHour: number; // Target hour in UK time (24h)
   title: string;
   body: string;
   tags: string[];
-  priority: number; // 1-5 (1=min, 3=default, 4=high, 5=urgent)
+  priority: number;
 }
 
-const MESSAGES: Record<string, NotifMessage> = {
-  morning: {
+const SCHEDULE: ScheduledNotif[] = [
+  {
+    slot: "morning",
+    ukHour: 7,
     title: "Morning check-in",
     body: "Time to start the day. Prayer, Bible, Cold Exposure, Keystone Task — let's go.",
     tags: ["sunrise", "white_check_mark"],
     priority: 4,
   },
-  midday: {
+  {
+    slot: "midday",
+    ukHour: 13,
     title: "Afternoon check-in",
     body: "Midday grind check. Deep work done? NSDR logged? Keep building.",
     tags: ["sun_with_face", "muscle"],
     priority: 3,
   },
-  evening: {
+  {
+    slot: "evening",
+    ukHour: 21,
     title: "Evening wrap-up",
     body: "End of day — log your training, reading, and close out strong.",
     tags: ["crescent_moon", "writing_hand"],
     priority: 4,
   },
-  warning: {
+  {
+    slot: "warning",
+    ukHour: 23,
     title: "Day isn't logged yet",
     body: "It's 11 PM. Habits still unlogged. Don't let the day slip — go log now.",
     tags: ["warning", "hourglass_flowing_sand"],
     priority: 5,
   },
-};
+];
+
+function getUkNow(): Date {
+  return new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Europe/London" })
+  );
+}
 
 export async function GET(request: Request) {
   // Verify cron secret (Vercel sends this automatically for cron jobs)
@@ -51,39 +69,36 @@ export async function GET(request: Request) {
   }
 
   if (!NTFY_TOPIC) {
-    return NextResponse.json({ error: "NTFY_TOPIC not configured" }, { status: 500 });
+    return NextResponse.json(
+      { error: "NTFY_TOPIC not configured" },
+      { status: 500 }
+    );
   }
 
-  // Determine which notification to send based on current UK time
-  const now = new Date();
-  const ukTime = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
-  const hour = ukTime.getHours();
+  const ukNow = getUkNow();
+  const currentHour = ukNow.getHours();
+  const currentMinute = ukNow.getMinutes();
 
-  let slot: string;
-  if (hour >= 6 && hour <= 8) {
-    slot = "morning";
-  } else if (hour >= 12 && hour <= 14) {
-    slot = "midday";
-  } else if (hour >= 20 && hour <= 22) {
-    slot = "evening";
-  } else if (hour === 23) {
-    slot = "warning";
-  } else {
-    return NextResponse.json({ ok: true, skipped: true, hour });
-  }
+  const results: { slot: string; delay: string; status: string }[] = [];
 
-  const msg = MESSAGES[slot];
+  for (const notif of SCHEDULE) {
+    // Calculate delay in minutes from now to target UK hour
+    let delayMinutes =
+      (notif.ukHour - currentHour) * 60 - currentMinute;
 
-  try {
-    const response = await fetch("https://ntfy.sh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    // If target time already passed today, skip it
+    if (delayMinutes < 0) {
+      results.push({ slot: notif.slot, delay: "skipped", status: "past" });
+      continue;
+    }
+
+    try {
+      const body: Record<string, unknown> = {
         topic: NTFY_TOPIC,
-        title: msg.title,
-        message: msg.body,
-        tags: msg.tags,
-        priority: msg.priority,
+        title: notif.title,
+        message: notif.body,
+        tags: notif.tags,
+        priority: notif.priority,
         click: `${APP_URL}/checkin`,
         actions: [
           {
@@ -92,16 +107,46 @@ export async function GET(request: Request) {
             url: `${APP_URL}/checkin`,
           },
         ],
-      }),
-    });
+      };
 
-    if (!response.ok) {
-      const text = await response.text();
-      return NextResponse.json({ error: "ntfy failed", status: response.status, body: text }, { status: 500 });
+      // Only add delay if > 0 minutes in the future
+      if (delayMinutes > 0) {
+        body.delay = `${delayMinutes}m`;
+      }
+
+      const response = await fetch("https://ntfy.sh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        results.push({
+          slot: notif.slot,
+          delay: `${delayMinutes}m`,
+          status: `error: ${text}`,
+        });
+      } else {
+        results.push({
+          slot: notif.slot,
+          delay: delayMinutes > 0 ? `${delayMinutes}m` : "immediate",
+          status: "scheduled",
+        });
+      }
+    } catch (error) {
+      results.push({
+        slot: notif.slot,
+        delay: `${delayMinutes}m`,
+        status: `error: ${String(error)}`,
+      });
     }
-
-    return NextResponse.json({ ok: true, slot, hour, sent: true });
-  } catch (error) {
-    return NextResponse.json({ error: "Failed to send notification", details: String(error) }, { status: 500 });
   }
+
+  return NextResponse.json({
+    ok: true,
+    cronTime: ukNow.toISOString(),
+    ukHour: currentHour,
+    results,
+  });
 }
