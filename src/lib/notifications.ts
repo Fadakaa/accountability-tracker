@@ -210,9 +210,10 @@ export function startNotificationScheduler(): void {
     tickEndOfDay();
   }, 60 * 1000);
 
-  // Also run immediately
+  // Also run immediately (including tickEndOfDay — fix for 11PM/midnight edge case)
   tickScheduler();
   tickEscalations();
+  tickEndOfDay();
 }
 
 export function stopNotificationScheduler(): void {
@@ -409,9 +410,12 @@ function tickEndOfDay(): void {
   const state = loadState();
   const todayLog = state.logs.find((l) => l.date === today);
 
-  // 11:00 PM warning — if day isn't fully logged (range check: 23:00-23:01)
-  const notifState11 = loadNotifState();
-  if (hour === 23 && minute <= 1 && notifState11.last11pmWarning !== today) {
+  // Single shared notif state to avoid stale read-write race
+  const notifState = loadNotifState();
+  let notifStateChanged = false;
+
+  // 11:00 PM warning — if day isn't fully logged (range check: 23:00-23:04)
+  if (hour === 23 && minute <= 4 && notifState.last11pmWarning !== today) {
     const allBinaryHabits = getResolvedHabits().filter((h) => h.category === "binary" && h.is_active);
     const loggedCount = allBinaryHabits.filter(
       (h) => todayLog?.entries[h.id]?.status === "done" || todayLog?.entries[h.id]?.status === "missed"
@@ -434,16 +438,15 @@ function tickEndOfDay(): void {
         "/"
       );
     }
-    notifState11.last11pmWarning = today;
-    saveNotifState(notifState11);
+    notifState.last11pmWarning = today;
+    notifStateChanged = true;
   }
 
-  // Midnight — auto-mark all unlogged as missed (range check: 00:00-00:01)
-  const notifStateMid = loadNotifState();
+  // Midnight — auto-mark all unlogged as missed (range check: 00:00-00:04)
   const yesterdayForCheck = new Date(now);
   yesterdayForCheck.setDate(yesterdayForCheck.getDate() - 1);
   const yesterdayCheckStr = yesterdayForCheck.toISOString().slice(0, 10);
-  if (hour === 0 && minute <= 1 && notifStateMid.lastMidnightMiss !== yesterdayCheckStr) {
+  if (hour === 0 && minute <= 4 && notifState.lastMidnightMiss !== yesterdayCheckStr) {
     const yesterdayLog = state.logs.find((l) => l.date === yesterdayCheckStr);
 
     const allHabits = getResolvedHabits().filter((h) => h.category === "binary" && h.is_active);
@@ -460,9 +463,6 @@ function tickEndOfDay(): void {
         missedCount++;
       }
     }
-
-    // Also auto-miss bad habits (if not logged, assume clean — no penalty)
-    // Bad habits that weren't logged = assumed not to have occurred
 
     if (missedCount > 0) {
       if (!yesterdayLog) {
@@ -487,8 +487,12 @@ function tickEndOfDay(): void {
         "/checkin"
       );
     }
-    notifStateMid.lastMidnightMiss = yesterdayCheckStr;
-    saveNotifState(notifStateMid);
+    notifState.lastMidnightMiss = yesterdayCheckStr;
+    notifStateChanged = true;
+  }
+
+  if (notifStateChanged) {
+    saveNotifState(notifState);
   }
 }
 
@@ -498,19 +502,3 @@ export function getPendingEscalationCount(): number {
   return notifState.escalations.filter((e) => !e.resolved).length;
 }
 
-// ─── Sprint Mode adjustments ────────────────────────────────
-export function getSprintAdjustedFibonacci(intensity: "moderate" | "intense" | "critical"): number[] {
-  if (intensity === "moderate") {
-    // Start at 21 min instead of 13
-    return [
-      21 * 60 * 1000,
-      13 * 60 * 1000,
-      8 * 60 * 1000,
-      5 * 60 * 1000,
-      3 * 60 * 1000,
-      1 * 60 * 1000,
-    ];
-  }
-  // Intense + Critical use normal intervals
-  return FIBONACCI_INTERVALS_MS;
-}

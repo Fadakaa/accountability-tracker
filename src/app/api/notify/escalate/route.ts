@@ -1,8 +1,9 @@
 // Fibonacci Escalation via ntfy.sh
 // When a user taps "Later" on a habit, this schedules escalating reminders:
-// +13 min → +8 min → +5 min → +3 min → +1 min → then every 1 min for 30 more mins
-// Each message includes a countdown to the next reminder.
-// Total: ~60 minutes of escalating then relentless reminders.
+// +13 min → +8 min → +5 min → +3 min → +1 min = 30 min total
+// Only 5 notifications are scheduled via ntfy (can't be cancelled once queued).
+// The browser-side escalation handles the relentless 1-min phase after that,
+// which CAN be cancelled when the habit is completed.
 //
 // NOTE: ntfy action buttons (view/http) don't work on iOS ntfy app.
 // We rely on the `click` URL (tap notification body) and include a
@@ -15,8 +16,7 @@ const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
   "https://accountability-tracker-sandy.vercel.app";
 
-const FIBONACCI_DELAYS = [13, 8, 5, 3, 1];
-const RELENTLESS_COUNT = 30;
+const FIBONACCI_DELAYS = [13, 8, 5, 3, 1]; // Only Fibonacci phase via ntfy
 
 interface EscalationStep {
   delay: number;
@@ -30,7 +30,7 @@ function buildSteps(habitName: string, habitIcon: string): EscalationStep[] {
   const steps: EscalationStep[] = [];
   const checkinUrl = `${APP_URL}/checkin`;
 
-  // Fibonacci phase (5 steps)
+  // Fibonacci phase only (5 steps) — browser handles relentless phase
   const fibMessages = [
     {
       title: `${habitIcon} ${habitName}`,
@@ -58,7 +58,7 @@ function buildSteps(habitName: string, habitIcon: string): EscalationStep[] {
     },
     {
       title: `${habitIcon} Final call: ${habitName}`,
-      message: `Last call: ${habitName}. Yes or No. No more later.\n\nReminders every minute until you log it.\n\n👉 ${checkinUrl}`,
+      message: `Last call: ${habitName}. Yes or No. No more later.\n\nOpen the app to log it now.\n\n👉 ${checkinUrl}`,
       priority: 5,
       tags: ["rotating_light", "exclamation"],
     },
@@ -68,32 +68,6 @@ function buildSteps(habitName: string, habitIcon: string): EscalationStep[] {
     steps.push({
       delay: FIBONACCI_DELAYS[i],
       ...fibMessages[i],
-    });
-  }
-
-  // Relentless phase — every 1 minute
-  const relentlessMessages = [
-    "I don't negotiate with the plan. I execute it.",
-    "Still waiting. Log it or miss it.",
-    "Every minute you delay is a minute you chose comfort over discipline.",
-    "This is the resistance. Push through it.",
-    "The habit takes 2 minutes. The regret lasts all day.",
-    "You said 'later'. Later is now.",
-    "No shortcuts. No excuses. Log it.",
-    "The system only works if you work the system.",
-    "One more minute of avoidance won't make it easier.",
-    "You're better than this. Prove it.",
-  ];
-
-  for (let i = 0; i < RELENTLESS_COUNT; i++) {
-    const msgText = relentlessMessages[i % relentlessMessages.length];
-    const minutesLeft = RELENTLESS_COUNT - i;
-    steps.push({
-      delay: 1,
-      title: `${habitIcon} ${habitName} — still unlogged`,
-      message: `${msgText}\n\n${minutesLeft > 1 ? `Reminders continue for ${minutesLeft} more minutes.` : "Final reminder."}\n\n👉 ${checkinUrl}`,
-      priority: 5,
-      tags: ["rotating_light"],
     });
   }
 
@@ -129,9 +103,6 @@ export async function POST(request: Request) {
     cumulativeDelay += step.delay;
 
     try {
-      // No `actions` array — iOS ntfy app doesn't support action buttons.
-      // The `click` field opens the URL when the notification body is tapped.
-      // The message text also includes the URL as a clickable fallback.
       const ntfyBody: Record<string, unknown> = {
         topic: NTFY_TOPIC,
         title: step.title,
@@ -176,8 +147,8 @@ export async function POST(request: Request) {
     habit: habitName,
     totalSteps: steps.length,
     totalEscalationMinutes: cumulativeDelay,
-    fibonacciPhase: `${FIBONACCI_DELAYS.join(" + ")} = 30 min`,
-    relentlessPhase: `${RELENTLESS_COUNT} x 1 min = ${RELENTLESS_COUNT} min`,
+    fibonacciPhase: `${FIBONACCI_DELAYS.join(" + ")} = ${cumulativeDelay} min`,
+    note: "Browser-side handles relentless 1-min phase (cancellable on completion)",
     scheduledCount: results.filter((r) => r.status === "scheduled").length,
     errorCount: results.filter((r) => r.status.startsWith("error")).length,
   });

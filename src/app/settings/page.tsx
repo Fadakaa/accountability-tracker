@@ -648,6 +648,8 @@ function NotificationScheduleEditor() {
     settings.notificationSlots = next;
     settings.checkinTimes = syncCheckinTimesFromSlots(next);
     saveSettings(settings);
+    // Push updated schedule to service worker immediately
+    syncScheduleToServiceWorker();
   }
 
   function updateSlot(id: string, updates: Partial<NotificationSlot>) {

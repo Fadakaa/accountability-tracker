@@ -6,7 +6,7 @@ import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalc
 import type { DayLog, DeferredHabit, AdminTask } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
-import { startEscalation, resolveEscalation, resolveAllEscalations, syncCompletionToServiceWorker } from "@/lib/notifications";
+import { startEscalation, resolveEscalation, syncCompletionToServiceWorker } from "@/lib/notifications";
 import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
 
@@ -413,6 +413,8 @@ export default function CheckinPage() {
     }
 
     saveState(state);
+    // Update SW about completion state so it can suppress notifications for done stacks
+    syncCompletionToServiceWorker();
     setSavedPartial(true);
     setTimeout(() => setSavedPartial(false), 2000);
   }
