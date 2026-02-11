@@ -10,7 +10,7 @@ import {
   loadGymSessions,
 } from "@/lib/store";
 import type { LocalState, DayLog, WrapReflection } from "@/lib/store";
-import { getResolvedHabits } from "@/lib/resolvedHabits";
+import { getHabitsWithHistory } from "@/lib/resolvedHabits";
 import { getFlameIcon, XP_VALUES } from "@/lib/habits";
 import type { Habit } from "@/types/database";
 
@@ -237,7 +237,7 @@ function buildCards(
   const cards: WrapCard[] = [];
   const weekLogs = getWeekLogs(state);
   const prevWeekLogs = getPrevWeekLogs(state);
-  const habits = getResolvedHabits();
+  const habits = getHabitsWithHistory();
   const activeHabits = habits.filter((h) => h.is_active);
   const binaryHabits = activeHabits.filter((h) => h.category === "binary");
   const badHabits = activeHabits.filter((h) => h.category === "bad");

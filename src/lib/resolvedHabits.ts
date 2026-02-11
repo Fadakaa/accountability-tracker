@@ -5,28 +5,45 @@ import { HABITS } from "./habits";
 import { loadSettings, loadState } from "./store";
 import type { Habit, HabitStack } from "@/types/database";
 
-export function getResolvedHabits(): Habit[] {
-  const settings = loadSettings();
-  return HABITS.map((habit) => {
-    const override = settings.habitOverrides[habit.id];
-    if (!override) return habit;
-    return {
-      ...habit,
-      stack: override.stack ?? habit.stack,
-      is_bare_minimum: override.is_bare_minimum ?? habit.is_bare_minimum,
-      is_active: override.is_active ?? habit.is_active,
-      current_level: override.current_level ?? habit.current_level,
-      sort_order: override.sort_order ?? habit.sort_order,
-    };
-  }).sort((a, b) => a.sort_order - b.sort_order);
+/** Extended habit type that marks whether a habit has been retired (deactivated but has history) */
+export interface ResolvedHabit extends Habit {
+  isRetired: boolean;
 }
 
-export function getResolvedHabitsByStack(stack: HabitStack): Habit[] {
+/**
+ * Returns all habits with user overrides applied.
+ * @param includeInactive - if true, includes deactivated habits (for analytics/historical views)
+ */
+export function getResolvedHabits(includeInactive = false): ResolvedHabit[] {
+  const settings = loadSettings();
+  const all = HABITS.map((habit) => {
+    const override = settings.habitOverrides[habit.id];
+    const resolved: ResolvedHabit = {
+      ...habit,
+      stack: override?.stack ?? habit.stack,
+      is_bare_minimum: override?.is_bare_minimum ?? habit.is_bare_minimum,
+      is_active: override?.is_active ?? habit.is_active,
+      current_level: override?.current_level ?? habit.current_level,
+      sort_order: override?.sort_order ?? habit.sort_order,
+      isRetired: false,
+    };
+    // Mark as retired if it was deactivated
+    if (!resolved.is_active) {
+      resolved.isRetired = true;
+    }
+    return resolved;
+  }).sort((a, b) => a.sort_order - b.sort_order);
+
+  if (includeInactive) return all;
+  return all.filter((h) => h.is_active);
+}
+
+export function getResolvedHabitsByStack(stack: HabitStack): ResolvedHabit[] {
   return getResolvedHabits().filter((h) => h.stack === stack && h.is_active);
 }
 
 /** Returns habits in the order defined by the routine chain (if set), falling back to sort_order */
-export function getResolvedHabitsByChainOrder(stack: HabitStack): Habit[] {
+export function getResolvedHabitsByChainOrder(stack: HabitStack): ResolvedHabit[] {
   const settings = loadSettings();
   const chain = settings.routineChains?.[stack] ?? [];
   const stackHabits = getResolvedHabitsByStack(stack);
@@ -34,7 +51,7 @@ export function getResolvedHabitsByChainOrder(stack: HabitStack): Habit[] {
   if (chain.length === 0) return stackHabits;
 
   // Build ordered list: chain order first, then any habits not in the chain
-  const ordered: Habit[] = [];
+  const ordered: ResolvedHabit[] = [];
   const seen = new Set<string>();
 
   for (const item of chain) {
@@ -58,11 +75,12 @@ export function getResolvedHabitsByChainOrder(stack: HabitStack): Habit[] {
 }
 
 /** Returns all active habits PLUS any inactive habits that have historical log data.
- *  Use this in analytics/insights pages so deactivated habits still appear in charts. */
-export function getHabitsWithHistory(): Habit[] {
-  const resolved = getResolvedHabits();
-  const active = resolved.filter((h) => h.is_active);
-  const inactive = resolved.filter((h) => !h.is_active);
+ *  Use this in analytics/insights pages so deactivated habits still appear in charts.
+ *  Retired habits are marked with isRetired: true for display purposes. */
+export function getHabitsWithHistory(): ResolvedHabit[] {
+  const all = getResolvedHabits(true); // get everything including inactive
+  const active = all.filter((h) => h.is_active);
+  const inactive = all.filter((h) => !h.is_active);
 
   if (inactive.length === 0) return active;
 
@@ -74,6 +92,9 @@ export function getHabitsWithHistory(): Habit[] {
     for (const id of Object.keys(log.badEntries)) loggedIds.add(id);
   }
 
-  const inactiveWithHistory = inactive.filter((h) => loggedIds.has(h.id));
+  const inactiveWithHistory = inactive
+    .filter((h) => loggedIds.has(h.id))
+    .map((h) => ({ ...h, isRetired: true }));
+
   return [...active, ...inactiveWithHistory];
 }

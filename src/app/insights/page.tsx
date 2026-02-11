@@ -18,6 +18,7 @@ import {
   getSingleHabitStats,
 } from "@/lib/analytics";
 import type { Habit } from "@/types/database";
+import type { ResolvedHabit } from "@/lib/resolvedHabits";
 
 import HeatMap from "@/components/charts/HeatMap";
 import LineChart from "@/components/charts/LineChart";
@@ -615,17 +616,21 @@ function HabitFilterChip({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const isRetired = "isRetired" in habit && (habit as ResolvedHabit).isRetired;
   return (
     <button
       onClick={onSelect}
       className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all active:scale-95 ${
         isSelected
           ? "bg-brand text-white ring-1 ring-brand"
-          : "bg-surface-700 text-neutral-400 hover:text-neutral-200 hover:bg-surface-600"
+          : isRetired
+            ? "bg-surface-700/50 text-neutral-500 hover:text-neutral-300 hover:bg-surface-600 opacity-60"
+            : "bg-surface-700 text-neutral-400 hover:text-neutral-200 hover:bg-surface-600"
       }`}
     >
       <span>{habit.icon}</span>
       <span>{habit.name}</span>
+      {isRetired && <span className="text-[8px] text-neutral-600 ml-0.5">retired</span>}
     </button>
   );
 }

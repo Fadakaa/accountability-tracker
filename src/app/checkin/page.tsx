@@ -70,12 +70,19 @@ export default function CheckinPage() {
 
   // Lock screen state — shows when a stack is already submitted
   const [stackAlreadyDone, setStackAlreadyDone] = useState(false);
-  const [lockSummary, setLockSummary] = useState<{ done: number; missed: number; later: number; cleanBad: number; slippedBad: number }>({ done: 0, missed: 0, later: 0, cleanBad: 0, slippedBad: 0 });
+  const [lockSummary, setLockSummary] = useState<{ done: number; missed: number; later: number; cleanBad: number; slippedBad: number; measuredCount: number; totalXp: number; bareMinStreak: number }>({ done: 0, missed: 0, later: 0, cleanBad: 0, slippedBad: 0, measuredCount: 0, totalXp: 0, bareMinStreak: 0 });
   const [allStacksDone, setAllStacksDone] = useState(false);
+  const [dayDismissed, setDayDismissed] = useState(false);
 
   useEffect(() => {
     const state = loadState();
     setStreaks(state.streaks);
+
+    // Check sessionStorage for day-level dismissal
+    const dismissKey = `lock-dismissed-${getToday()}`;
+    if (typeof window !== "undefined" && sessionStorage.getItem(dismissKey)) {
+      setDayDismissed(true);
+    }
 
     // Check if current stack is already submitted
     checkStackLock(activeStack, state);
@@ -90,8 +97,10 @@ export default function CheckinPage() {
       return;
     }
 
-    const stackBinary = getResolvedHabitsByChainOrder(stack).filter((h) => h.category === "binary" && h.is_active);
-    const stackBad = getResolvedHabitsByChainOrder(stack).filter((h) => h.category === "bad" && h.is_active);
+    const stackHabits = getResolvedHabitsByChainOrder(stack);
+    const stackBinary = stackHabits.filter((h) => h.category === "binary" && h.is_active);
+    const stackBad = stackHabits.filter((h) => h.category === "bad" && h.is_active);
+    const stackMeasured = stackHabits.filter((h) => h.category === "measured" && h.is_active);
 
     // Check if every binary has a status and every bad has an occurred value
     const allBinaryAnswered = stackBinary.length > 0 && stackBinary.every((h) => {
@@ -105,19 +114,24 @@ export default function CheckinPage() {
 
     if (allBinaryAnswered && allBadAnswered) {
       // Build summary
-      let done = 0, missed = 0, later = 0, cleanBad = 0, slippedBad = 0;
+      let done = 0, missed = 0, later = 0, cleanBad = 0, slippedBad = 0, measuredCount = 0;
       for (const h of stackBinary) {
-        const s = todayLog.entries[h.id]?.status;
-        if (s === "done") done++;
-        else if (s === "missed") missed++;
-        else if (s === "later") later++;
+        const st = todayLog.entries[h.id]?.status;
+        if (st === "done") done++;
+        else if (st === "missed") missed++;
+        else if (st === "later") later++;
       }
       for (const h of stackBad) {
         const e = todayLog.badEntries[h.id];
         if (e?.occurred === false) cleanBad++;
         else if (e?.occurred === true) slippedBad++;
       }
-      setLockSummary({ done, missed, later, cleanBad, slippedBad });
+      // Count measured habits that have values logged
+      for (const h of stackMeasured) {
+        const entry = todayLog.entries[h.id];
+        if (entry?.value != null && entry.value > 0) measuredCount++;
+      }
+      setLockSummary({ done, missed, later, cleanBad, slippedBad, measuredCount, totalXp: todayLog.xpEarned, bareMinStreak: s.bareMinimumStreak ?? 0 });
       setStackAlreadyDone(true);
 
       // Check if ALL stacks are done
@@ -457,24 +471,105 @@ export default function CheckinPage() {
   }
 
   // ─── Lock Screen (stack already submitted) ─────────────────
-  if (phase === "checkin" && stackAlreadyDone) {
+  if (phase === "checkin" && stackAlreadyDone && !dayDismissed) {
     const stackLabel = activeStack === "morning" ? "Morning" : activeStack === "midday" ? "Afternoon" : "Evening";
     const nextStack: HabitStack | null = activeStack === "morning" ? "midday" : activeStack === "midday" ? "evening" : null;
     const quote = getQuoteOfTheDay();
 
+    // Full-day celebration when ALL stacks are complete
+    if (allStacksDone) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center bg-gradient-to-b from-surface-900 via-emerald-950/30 to-surface-900">
+          {/* Trophy */}
+          <div className="text-6xl mb-4 animate-pulse">🏆</div>
+          <h1 className="text-2xl font-black text-done mb-2">Day Complete!</h1>
+          <p className="text-sm text-neutral-400 mb-6">
+            All three stacks submitted. You showed up today.
+          </p>
+
+          {/* Quote */}
+          <div className="max-w-xs text-neutral-400 text-sm italic leading-relaxed mb-6">
+            &ldquo;{quote.text}&rdquo;
+          </div>
+
+          {/* Day Stats */}
+          <div className="w-full max-w-sm rounded-xl bg-surface-800 border border-done/20 p-4 mb-4">
+            <h2 className="text-xs font-bold text-done uppercase tracking-wider mb-3">
+              Today&apos;s Stats
+            </h2>
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-done/10 p-3">
+                <div className="text-2xl font-black text-brand">{lockSummary.totalXp}</div>
+                <div className="text-[10px] text-neutral-500 uppercase">XP Earned</div>
+              </div>
+              <div className="rounded-lg bg-done/10 p-3">
+                <div className="text-2xl font-black text-done">{lockSummary.done}</div>
+                <div className="text-[10px] text-neutral-500 uppercase">Habits Done</div>
+              </div>
+              {lockSummary.measuredCount > 0 && (
+                <div className="rounded-lg bg-blue-500/10 p-3">
+                  <div className="text-2xl font-black text-blue-400">{lockSummary.measuredCount}</div>
+                  <div className="text-[10px] text-neutral-500 uppercase">Measured</div>
+                </div>
+              )}
+              <div className="rounded-lg bg-brand/10 p-3">
+                <div className="text-2xl font-black text-brand">{lockSummary.bareMinStreak}</div>
+                <div className="text-[10px] text-neutral-500 uppercase">Min Streak</div>
+              </div>
+            </div>
+            {(lockSummary.cleanBad > 0 || lockSummary.slippedBad > 0) && (
+              <div className="flex gap-2 text-center mt-3">
+                <div className="flex-1 rounded-lg bg-done/10 p-2">
+                  <div className="text-sm font-bold text-done">{lockSummary.cleanBad} clean</div>
+                </div>
+                {lockSummary.slippedBad > 0 && (
+                  <div className="flex-1 rounded-lg bg-bad/10 p-2">
+                    <div className="text-sm font-bold text-bad">{lockSummary.slippedBad} slipped</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="w-full max-w-sm space-y-2">
+            <a
+              href="/edit-log"
+              className="block w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm font-medium text-neutral-300 text-center hover:bg-surface-700 transition-colors"
+            >
+              {"📝"} Edit Today&apos;s Answers
+            </a>
+            <a
+              href="/"
+              className="block w-full rounded-xl bg-done text-white py-3 text-sm font-bold text-center transition-colors active:scale-[0.98]"
+            >
+              {"🏠"} Dashboard
+            </a>
+            <button
+              onClick={() => {
+                setDayDismissed(true);
+                setStackAlreadyDone(false);
+                if (typeof window !== "undefined") {
+                  sessionStorage.setItem(`lock-dismissed-${getToday()}`, "1");
+                }
+              }}
+              className="w-full py-2 text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
+            >
+              Override — log again
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Per-stack lock screen
     return (
       <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
         {/* Status */}
-        <div className="text-4xl mb-3">
-          {allStacksDone ? "🏆" : "✅"}
-        </div>
-        <h1 className="text-xl font-bold mb-1">
-          {allStacksDone ? "Day Complete" : `${stackLabel} Logged`}
-        </h1>
+        <div className="text-4xl mb-3">✅</div>
+        <h1 className="text-xl font-bold mb-1">{stackLabel} Logged</h1>
         <p className="text-sm text-neutral-400 mb-6">
-          {allStacksDone
-            ? "All stacks submitted. Rest well."
-            : `Your ${stackLabel.toLowerCase()} check-in is done.`}
+          Your {stackLabel.toLowerCase()} check-in is done.
         </p>
 
         {/* Quote */}
@@ -501,6 +596,11 @@ export default function CheckinPage() {
               <div className="text-[10px] text-neutral-500">Later</div>
             </div>
           </div>
+          {lockSummary.measuredCount > 0 && (
+            <div className="rounded-lg bg-blue-500/10 p-2 text-center mb-2">
+              <div className="text-sm font-bold text-blue-400">{lockSummary.measuredCount} measured logged</div>
+            </div>
+          )}
           {(lockSummary.cleanBad > 0 || lockSummary.slippedBad > 0) && (
             <div className="flex gap-2 text-center">
               <div className="flex-1 rounded-lg bg-done/10 p-2">
@@ -516,7 +616,7 @@ export default function CheckinPage() {
         {/* Actions */}
         <div className="w-full max-w-sm space-y-2">
           <a
-            href={`/edit-log`}
+            href="/edit-log"
             className="block w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm font-medium text-neutral-300 text-center hover:bg-surface-700 transition-colors"
           >
             {"📝"} Edit Today&apos;s Answers
@@ -542,7 +642,13 @@ export default function CheckinPage() {
           </a>
 
           <button
-            onClick={() => setStackAlreadyDone(false)}
+            onClick={() => {
+              setDayDismissed(true);
+              setStackAlreadyDone(false);
+              if (typeof window !== "undefined") {
+                sessionStorage.setItem(`lock-dismissed-${getToday()}`, "1");
+              }
+            }}
             className="w-full py-2 text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
           >
             Override — log again

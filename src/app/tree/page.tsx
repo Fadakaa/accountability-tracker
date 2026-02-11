@@ -7,6 +7,12 @@ import { HABIT_LEVELS, getFlameIcon } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { evaluateLevelSuggestions, acceptLevelUp, declineLevelUp, acceptDropBack } from "@/lib/adaptive";
 import type { LevelSuggestion } from "@/lib/adaptive";
+import {
+  TREE_BRANCHES,
+  getBranchForHabit,
+  getBranchDef,
+  type TreeBranchName,
+} from "@/lib/treeBranches";
 
 // ─── Skill Tree Data ────────────────────────────────────────
 interface SkillNode {
@@ -26,15 +32,17 @@ interface SkillBranch {
   nodes: SkillNode[];
 }
 
-// Build branches from HABIT_LEVELS data
+// Build branches dynamically using auto-branching
 function buildSkillTree(): SkillBranch[] {
+  const resolvedHabits = getResolvedHabits();
+
   // Map habit IDs that have levels
   const habitMap = new Map<string, SkillNode[]>();
   for (const hl of HABIT_LEVELS) {
-    const habit = getResolvedHabits().find((h) => h.id === hl.habit_id);
+    const habit = resolvedHabits.find((h) => h.id === hl.habit_id);
     if (!habit) continue;
 
-    const nodes = habitMap.get(habit.slug) ?? [];
+    const nodes = habitMap.get(habit.id) ?? [];
     nodes.push({
       habitSlug: habit.slug,
       habitId: habit.id,
@@ -44,51 +52,35 @@ function buildSkillTree(): SkillBranch[] {
       label: hl.label,
       description: hl.description,
     });
-    habitMap.set(habit.slug, nodes);
+    habitMap.set(habit.id, nodes);
   }
 
-  // Organize into branches per the spec
-  const branches: SkillBranch[] = [
-    {
-      name: "Spiritual",
-      icon: "🙏",
-      color: "#a78bfa", // purple
-      nodes: [
-        ...(habitMap.get("prayer") ?? []),
-        ...(habitMap.get("bible-reading") ?? []),
-        ...(habitMap.get("meditation") ?? []),
-      ],
-    },
-    {
-      name: "Physical",
-      icon: "💪",
-      color: "#f97316", // orange
-      nodes: [
-        ...(habitMap.get("training") ?? []),
-        ...(habitMap.get("training-minutes") ?? []),
-        ...(habitMap.get("cold-exposure") ?? []),
-      ],
-    },
-    {
-      name: "Mind",
-      icon: "🧠",
-      color: "#3b82f6", // blue
-      nodes: [
-        ...(habitMap.get("reading") ?? []),
-        ...(habitMap.get("journal") ?? []),
-        ...(habitMap.get("deep-work") ?? []),
-        ...(habitMap.get("keystone-task") ?? []),
-      ],
-    },
-    {
-      name: "Environment",
-      icon: "🏠",
-      color: "#22c55e", // green
-      nodes: [
-        ...(habitMap.get("tidy") ?? []),
-      ],
-    },
-  ];
+  // Group habits into branches dynamically
+  const branchGroups = new Map<TreeBranchName, SkillNode[]>();
+
+  for (const [habitId, nodes] of habitMap) {
+    const habit = resolvedHabits.find((h) => h.id === habitId);
+    if (!habit) continue;
+
+    const branchName = getBranchForHabit(habit);
+    const existing = branchGroups.get(branchName) ?? [];
+    existing.push(...nodes);
+    branchGroups.set(branchName, existing);
+  }
+
+  // Convert to SkillBranch array, preserving branch order from TREE_BRANCHES
+  const branches: SkillBranch[] = [];
+  for (const branchDef of TREE_BRANCHES) {
+    const nodes = branchGroups.get(branchDef.name);
+    if (nodes && nodes.length > 0) {
+      branches.push({
+        name: branchDef.name,
+        icon: branchDef.icon,
+        color: branchDef.color,
+        nodes,
+      });
+    }
+  }
 
   return branches;
 }
@@ -139,7 +131,6 @@ export default function SkillTreePage() {
   const resolvedHabits = getResolvedHabits();
 
   // Calculate tree health: weighted score from unlocked levels (60%) + active streaks (40%)
-  // This means your tree stays healthy only if you're BOTH levelling up AND staying consistent
   let totalNodes = 0;
   let unlockedNodes = 0;
   const uniqueHabitSlugs = new Set<string>();
@@ -200,7 +191,7 @@ export default function SkillTreePage() {
       {/* How it works */}
       <section className="rounded-xl bg-surface-800/50 border border-surface-700 p-3 mb-6">
         <p className="text-[11px] text-neutral-500 leading-relaxed">
-          <span className="text-brand font-semibold">How it works:</span> Start at Lv.1 (easy). Stay consistent for 14 days at {">"}85% and the app suggests levelling up. Accept → new level becomes your standard. Max level is 4.
+          <span className="text-brand font-semibold">How it works:</span> Start at Lv.1 (easy). Stay consistent for 14 days at {">"}85% and the app suggests levelling up. Accept → new level becomes your standard. Branches are auto-assigned based on habit type.
         </p>
       </section>
 

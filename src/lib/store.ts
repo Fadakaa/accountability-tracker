@@ -232,6 +232,7 @@ export interface HabitOverride {
   is_active?: boolean;
   current_level?: number;
   sort_order?: number;
+  treeBranch?: string;  // User override for skill tree branch assignment
 }
 
 export interface LevelUpState {
