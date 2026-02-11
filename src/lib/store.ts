@@ -350,22 +350,24 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
 }
 
 export function getLevelForXP(xp: number): { level: number; title: string; xpRequired: number; nextXp: number } {
+  // ~435 XP per perfect day. Thresholds calibrated so:
+  // Lv2 = 1 perfect day, Lv3 = 3 days, Lv5 = ~2 weeks, Lv10 = ~3 months
   const levels = [
     { level: 1,  title: "Beginner",          xpRequired: 0 },
-    { level: 2,  title: "Showing Up",        xpRequired: 500 },
-    { level: 3,  title: "Building Momentum", xpRequired: 1200 },
-    { level: 4,  title: "Forming Habits",    xpRequired: 2500 },
-    { level: 5,  title: "Consistent",        xpRequired: 4500 },
-    { level: 6,  title: "Dedicated",         xpRequired: 7500 },
-    { level: 7,  title: "Disciplined",       xpRequired: 11500 },
-    { level: 8,  title: "Relentless",        xpRequired: 17000 },
-    { level: 9,  title: "Atomic",            xpRequired: 24000 },
-    { level: 10, title: "Unshakeable",       xpRequired: 33000 },
-    { level: 11, title: "Identity Shift",    xpRequired: 45000 },
-    { level: 12, title: "The Standard",      xpRequired: 60000 },
-    { level: 13, title: "Elite",             xpRequired: 80000 },
-    { level: 14, title: "Legendary",         xpRequired: 105000 },
-    { level: 15, title: "Transcendent",      xpRequired: 140000 },
+    { level: 2,  title: "Showing Up",        xpRequired: 400 },     // ~1 day
+    { level: 3,  title: "Building Momentum", xpRequired: 1200 },    // ~3 days
+    { level: 4,  title: "Forming Habits",    xpRequired: 2800 },    // ~1 week
+    { level: 5,  title: "Consistent",        xpRequired: 5500 },    // ~2 weeks
+    { level: 6,  title: "Dedicated",         xpRequired: 9500 },    // ~3 weeks
+    { level: 7,  title: "Disciplined",       xpRequired: 15000 },   // ~5 weeks
+    { level: 8,  title: "Relentless",        xpRequired: 22000 },   // ~7 weeks
+    { level: 9,  title: "Atomic",            xpRequired: 31000 },   // ~10 weeks
+    { level: 10, title: "Unshakeable",       xpRequired: 42000 },   // ~3 months
+    { level: 11, title: "Identity Shift",    xpRequired: 56000 },   // ~4 months
+    { level: 12, title: "The Standard",      xpRequired: 73000 },   // ~6 months
+    { level: 13, title: "Elite",             xpRequired: 95000 },   // ~7 months
+    { level: 14, title: "Legendary",         xpRequired: 125000 },  // ~10 months
+    { level: 15, title: "Transcendent",      xpRequired: 165000 },  // ~1 year
   ];
 
   let current = levels[0];
