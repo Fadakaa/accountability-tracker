@@ -8,6 +8,12 @@ import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel } from "@/lib/habits";
 import type { Habit, HabitStack } from "@/types/database";
+import {
+  requestNotificationPermission,
+  getNotificationPermission,
+  syncScheduleToServiceWorker,
+  startNotificationScheduler,
+} from "@/lib/notifications";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -67,6 +73,8 @@ export default function SettingsPage() {
     };
     setSettings(newSettings);
     saveSettings(newSettings);
+    // Sync new schedule to service worker
+    syncScheduleToServiceWorker();
   }
 
   function moveHabit(habit: Habit, direction: "up" | "down") {
@@ -135,6 +143,9 @@ export default function SettingsPage() {
           ))}
         </div>
       </section>
+
+      {/* Notifications */}
+      <NotificationSection />
 
       {/* Habit Management */}
       <section className="mb-6">
@@ -543,6 +554,98 @@ function QuotesSection({ settings, onUpdate }: { settings: UserSettings; onUpdat
           </div>
         );
       })}
+    </section>
+  );
+}
+
+// ─── Notification Settings ──────────────────────────────────
+function NotificationSection() {
+  const [permission, setPermission] = useState<string>("default");
+  const [testSent, setTestSent] = useState(false);
+
+  useEffect(() => {
+    setPermission(getNotificationPermission());
+  }, []);
+
+  async function handleEnable() {
+    const granted = await requestNotificationPermission();
+    setPermission(granted ? "granted" : "denied");
+    if (granted) {
+      startNotificationScheduler();
+      syncScheduleToServiceWorker();
+    }
+  }
+
+  async function sendTestNotification() {
+    if (Notification.permission !== "granted") return;
+    const registration = await navigator.serviceWorker?.ready;
+    if (registration) {
+      await registration.showNotification("Test notification 🔔", {
+        body: "Notifications are working! You'll get check-in reminders at your scheduled times.",
+        icon: "/icons/icon-192.svg",
+        badge: "/icons/icon-192.svg",
+        tag: "test",
+        data: { url: "/settings" },
+      });
+      setTestSent(true);
+      setTimeout(() => setTestSent(false), 3000);
+    }
+  }
+
+  return (
+    <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+      <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+        Push Notifications
+      </h2>
+
+      {permission === "granted" ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-done text-lg">{"✅"}</span>
+            <span className="text-sm text-neutral-300">Notifications enabled</span>
+          </div>
+          <p className="text-xs text-neutral-500">
+            You&apos;ll receive check-in reminders at your scheduled times,
+            an 11 PM warning if habits are unlogged, and escalating nudges
+            when you hit &quot;Later&quot; on a habit.
+          </p>
+          <button
+            onClick={sendTestNotification}
+            className={`w-full rounded-lg py-2.5 text-sm font-medium transition-all active:scale-[0.98] ${
+              testSent
+                ? "bg-done/20 text-done border border-done/30"
+                : "bg-surface-700 text-neutral-300 hover:text-white"
+            }`}
+          >
+            {testSent ? "✓ Test sent!" : "🔔 Send Test Notification"}
+          </button>
+        </div>
+      ) : permission === "denied" ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-missed text-lg">{"🔕"}</span>
+            <span className="text-sm text-neutral-400">Notifications blocked</span>
+          </div>
+          <p className="text-xs text-neutral-500">
+            You&apos;ve blocked notifications. To re-enable, go to your
+            browser settings and allow notifications for this site.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-neutral-400">
+            Enable push notifications to get check-in reminders at 7 AM,
+            1 PM, and 9 PM. The system chases you — so you don&apos;t have
+            to chase yourself.
+          </p>
+          <button
+            onClick={handleEnable}
+            className="w-full rounded-lg bg-brand hover:bg-brand-dark text-white text-sm font-bold py-2.5 transition-colors active:scale-[0.98]"
+          >
+            🔔 Enable Push Notifications
+          </button>
+        </div>
+      )}
     </section>
   );
 }

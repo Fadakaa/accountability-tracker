@@ -8,7 +8,7 @@ import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
-import { startNotificationScheduler, getNotificationPermission } from "@/lib/notifications";
+import { startNotificationScheduler, getNotificationPermission, syncScheduleToServiceWorker } from "@/lib/notifications";
 import NotificationBanner from "@/components/NotificationBanner";
 import LevelSuggestionBanner from "@/components/LevelSuggestionBanner";
 
@@ -21,6 +21,7 @@ export default function Home() {
     setWeakHabits(getWeakHabits());
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();
+      syncScheduleToServiceWorker();
     }
   }, []);
 

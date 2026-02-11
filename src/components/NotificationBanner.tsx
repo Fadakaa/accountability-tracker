@@ -6,6 +6,8 @@ import {
   getNotificationPermission,
   startNotificationScheduler,
   getPendingEscalationCount,
+  syncScheduleToServiceWorker,
+  pingServiceWorker,
 } from "@/lib/notifications";
 
 export default function NotificationBanner() {
@@ -17,9 +19,13 @@ export default function NotificationBanner() {
     const perm = getNotificationPermission();
     setPermission(perm);
 
-    // If already granted, start scheduler
+    // If already granted, start scheduler + sync to SW
     if (perm === "granted") {
       startNotificationScheduler();
+      syncScheduleToServiceWorker();
+      // Ping SW every 5 min to keep it alive
+      const pingInterval = setInterval(() => pingServiceWorker(), 5 * 60 * 1000);
+      return () => clearInterval(pingInterval);
     }
 
     // Poll pending escalations every 30s
@@ -36,6 +42,7 @@ export default function NotificationBanner() {
     setPermission(granted ? "granted" : "denied");
     if (granted) {
       startNotificationScheduler();
+      syncScheduleToServiceWorker();
     }
   }
 

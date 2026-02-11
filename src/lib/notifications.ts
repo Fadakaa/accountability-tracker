@@ -136,6 +136,31 @@ export async function showNotification(
   }
 }
 
+// ─── Send schedule to service worker ─────────────────────────
+// Passes the check-in times to the SW so it can fire notifications
+// even when the app tab isn't open
+export async function syncScheduleToServiceWorker(): Promise<void> {
+  if (!("serviceWorker" in navigator)) return;
+
+  const registration = await navigator.serviceWorker?.ready;
+  if (registration?.active) {
+    const settings = loadSettings();
+    registration.active.postMessage({
+      type: "SET_SCHEDULE",
+      schedule: settings.checkinTimes,
+    });
+  }
+}
+
+// ─── Keep-alive ping to service worker ───────────────────────
+// Called periodically from the app to keep the SW scheduler alive
+export function pingServiceWorker(): void {
+  if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.ready.then((registration) => {
+    registration.active?.postMessage({ type: "PING" });
+  });
+}
+
 // ─── Schedule the 3x daily check-in notifications ───────────
 // Uses setInterval to check every minute if it's time
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
