@@ -8,7 +8,7 @@ import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel } from "@/lib/habits";
 import type { Habit, HabitStack } from "@/types/database";
-import { DEFAULT_TREE_BRANCHES, getHabitBranch } from "@/lib/treeBranches";
+import { DEFAULT_TREE_BRANCHES, NEW_GROWTH_BRANCH, getHabitBranch } from "@/lib/treeBranches";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -97,6 +97,7 @@ export default function SettingsPage() {
       customQuotes: [],
       hiddenQuoteIds: [],
       routineChains: { morning: [], midday: [], evening: [] },
+      treeBranches: undefined,
     };
     setSettings(newSettings);
     saveSettings(newSettings);
@@ -339,7 +340,7 @@ function HabitSettingsRow({
               Tree Branch
             </label>
             <div className="flex gap-1.5">
-              {DEFAULT_TREE_BRANCHES.map((b) => {
+              {[...DEFAULT_TREE_BRANCHES, NEW_GROWTH_BRANCH].map((b) => {
                 const currentBranch = getHabitBranch(habit, settings);
                 return (
                   <button

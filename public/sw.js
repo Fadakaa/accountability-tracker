@@ -64,8 +64,8 @@ self.addEventListener("push", (event) => {
   const title = data.title || "Accountability Tracker";
   const options = {
     body: data.body || "Time for a check-in!",
-    icon: "/icons/icon-192.png",
-    badge: "/icons/icon-192.png",
+    icon: "/icons/icon-192.svg",
+    badge: "/icons/icon-192.svg",
     tag: data.tag || "checkin",
     data: {
       url: data.url || "/",

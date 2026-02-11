@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES } from "@/lib/habits";
-import { loadState, saveState, getToday, getLevelForXP, getSprintContext } from "@/lib/store";
+import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateDayXP } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
 import { startEscalation, resolveEscalation, resolveAllEscalations } from "@/lib/notifications";
@@ -184,97 +184,77 @@ export default function CheckinPage() {
   }
 
   function handleSubmit() {
-    // Calculate XP
-    let xp = 0;
     const streakUpdates: SubmissionResult["streakUpdates"] = [];
-
-    // Load current state for streak calculations
     const state = loadState();
     const today = getToday();
 
-    // Binary habits XP + streak updates
-    // In intense/critical, process both prompted AND extra habits that were answered
+    // ─── Snapshot existing state BEFORE mutations ───
+    const existingLog = state.logs.find((l) => l.date === today);
+    const oldDayXp = existingLog?.xpEarned ?? 0;
+    const previousEntries = existingLog?.entries ?? {};
+    const wasBareMinMet = existingLog?.bareMinimumMet ?? false;
+
+    // Track which habits were already "done" today
+    const previouslyDone = new Set<string>();
+    for (const [habitId, entry] of Object.entries(previousEntries)) {
+      if (entry.status === "done") {
+        previouslyDone.add(habitId);
+      }
+    }
+
+    // ─── Streak updates (idempotent — only change on state transitions) ───
     const allAnsweredBinary = [...binaryHabits, ...extraBinaryHabits];
+    let milestoneXp = 0;
+
     for (const habit of allAnsweredBinary) {
       const entry = entries.get(habit.id);
       if (!entry?.status) continue; // skip unanswered extras
-      if (entry.status === "done") {
-        if (habit.is_bare_minimum) {
-          xp += XP_VALUES.BARE_MINIMUM_HABIT;
-        }
-        // Update streak
-        const prevStreak = state.streaks[habit.slug] ?? 0;
-        const newStreak = prevStreak + 1;
-        state.streaks[habit.slug] = newStreak;
-        streakUpdates.push({
-          name: habit.name,
-          icon: habit.icon || "",
-          days: newStreak,
-        });
+      const wasDone = previouslyDone.has(habit.id);
 
-        // Streak milestone XP
-        if ([7, 14, 30, 60, 90].includes(newStreak)) {
-          xp += XP_VALUES.STREAK_MILESTONE;
+      if (entry.status === "done") {
+        if (!wasDone) {
+          // Newly done — increment streak
+          const prevStreak = state.streaks[habit.slug] ?? 0;
+          const newStreak = prevStreak + 1;
+          state.streaks[habit.slug] = newStreak;
+
+          // Streak milestone XP (only for new milestones)
+          if ([7, 14, 30, 60, 90].includes(newStreak)) {
+            milestoneXp += XP_VALUES.STREAK_MILESTONE;
+          }
+
+          streakUpdates.push({
+            name: habit.name,
+            icon: habit.icon || "",
+            days: newStreak,
+          });
+        } else {
+          // Already done before — show current streak but don't increment
+          streakUpdates.push({
+            name: habit.name,
+            icon: habit.icon || "",
+            days: state.streaks[habit.slug] ?? 0,
+          });
         }
       } else if (entry.status === "missed") {
-        // Critical mode: protect streaks — don't reset on miss
-        if (!sprint.protectStreaks) {
-          state.streaks[habit.slug] = 0;
+        if (wasDone) {
+          // Changed from done → missed — undo today's streak increment
+          const currentStreak = state.streaks[habit.slug] ?? 0;
+          if (!sprint.protectStreaks) {
+            state.streaks[habit.slug] = 0;
+          } else {
+            state.streaks[habit.slug] = Math.max(0, currentStreak - 1);
+          }
+        } else {
+          // Was not done, now missed — reset streak
+          if (!sprint.protectStreaks) {
+            state.streaks[habit.slug] = 0;
+          }
         }
       }
     }
 
-    // Measured habits XP — include extras that were answered
-    const allAnsweredMeasured = [...measuredHabits, ...extraMeasuredHabits];
-    for (const habit of allAnsweredMeasured) {
-      const entry = entries.get(habit.id);
-      if (entry?.value && entry.value > 0) {
-        xp += XP_VALUES.MEASURED_AT_TARGET;
-      }
-    }
-
-    // Bad habit XP
-    let anyBadOccurred = false;
-    for (const habit of badHabits) {
-      const entry = badEntries.get(habit.id);
-      if (entry?.occurred === false) {
-        xp += XP_VALUES.ZERO_BAD_HABIT_DAY;
-      } else if (entry?.occurred === true) {
-        xp += XP_VALUES.LOG_BAD_HABIT_HONESTLY;
-        anyBadOccurred = true;
-      }
-    }
-
-    // Bare minimum bonus — check ALL bare minimum habits across all stacks
-    const allBareMinHabits = getResolvedHabits().filter((h) => h.is_bare_minimum && h.is_active);
-    const stackBareMinDone = binaryHabits
-      .filter((h) => h.is_bare_minimum)
-      .every((h) => entries.get(h.id)?.status === "done");
-
-    // Check if today's other stacks already had bare minimum met
-    const todayLog = state.logs.find((l) => l.date === today);
-    const prevBareMinEntries = todayLog?.entries ?? {};
-    const prevBareMinMet = allBareMinHabits
-      .filter((h) => h.stack !== activeStack)
-      .every((h) => prevBareMinEntries[h.id]?.status === "done");
-
-    const bareMinDone = stackBareMinDone && prevBareMinMet;
-    if (bareMinDone) {
-      // Only award bare minimum bonus once per day
-      const existingLogForBareMin = state.logs.find((l) => l.date === today);
-      if (!existingLogForBareMin?.bareMinimumMet) {
-        xp += XP_VALUES.ALL_BARE_MINIMUM;
-        state.bareMinimumStreak = (state.bareMinimumStreak || 0) + 1;
-      }
-    }
-
-    // Perfect day check (simplified — all done in this stack + no bad)
-    const allDone = binaryHabits.every((h) => entries.get(h.id)?.status === "done");
-    if (allDone && !anyBadOccurred && bareMinDone) {
-      xp += XP_VALUES.PERFECT_DAY;
-    }
-
-    // Persist to local store
+    // ─── Build entry records and merge into log ───
     const entryRecord: DayLog["entries"] = {};
     entries.forEach((e, id) => {
       entryRecord[id] = { status: e.status ?? "later", value: e.value };
@@ -284,26 +264,60 @@ export default function CheckinPage() {
       badRecord[id] = { occurred: e.occurred ?? false, durationMinutes: e.durationMinutes };
     });
 
-    // Merge with existing today log (other stacks)
-    const existingLog = state.logs.find((l) => l.date === today);
+    let mergedLog: DayLog;
     if (existingLog) {
       Object.assign(existingLog.entries, entryRecord);
       Object.assign(existingLog.badEntries, badRecord);
-      existingLog.xpEarned += xp;
-      existingLog.bareMinimumMet = bareMinDone;
-      existingLog.submittedAt = new Date().toISOString();
+      mergedLog = existingLog;
     } else {
-      state.logs.push({
+      mergedLog = {
         date: today,
         entries: entryRecord,
         badEntries: badRecord,
-        xpEarned: xp,
-        bareMinimumMet: bareMinDone,
+        xpEarned: 0,
+        bareMinimumMet: false,
         submittedAt: new Date().toISOString(),
-      });
+      };
+      state.logs.push(mergedLog);
     }
 
-    state.totalXp += xp;
+    // ─── Recalculate entire day's XP from merged log ───
+    const allHabits = getResolvedHabits();
+    const habitsForXP = allHabits
+      .filter((h) => h.is_active)
+      .map((h) => ({
+        id: h.id,
+        slug: h.slug,
+        category: h.category,
+        is_bare_minimum: h.is_bare_minimum,
+        is_active: h.is_active,
+        unit: h.unit,
+      }));
+
+    const baseDayXp = recalculateDayXP(mergedLog, habitsForXP);
+    const newDayXp = baseDayXp + milestoneXp;
+
+    // ─── Bare minimum streak (idempotent) ───
+    const allBareMinHabits = allHabits.filter((h) => h.is_bare_minimum && h.is_active);
+    const allBareMinDone =
+      allBareMinHabits.length > 0 &&
+      allBareMinHabits.every((h) => mergedLog.entries[h.id]?.status === "done");
+
+    if (allBareMinDone && !wasBareMinMet) {
+      // Bare minimum newly met — increment streak
+      state.bareMinimumStreak = (state.bareMinimumStreak || 0) + 1;
+    } else if (!allBareMinDone && wasBareMinMet) {
+      // Was met before but re-submission undid it — decrement
+      state.bareMinimumStreak = Math.max(0, (state.bareMinimumStreak || 0) - 1);
+    }
+
+    // ─── Persist day log with correct XP ───
+    mergedLog.bareMinimumMet = allBareMinDone;
+    mergedLog.xpEarned = newDayXp;
+    mergedLog.submittedAt = new Date().toISOString();
+
+    // ─── Update global XP using delta (prevents double-counting) ───
+    state.totalXp = state.totalXp - oldDayXp + newDayXp;
     state.currentLevel = getLevelForXP(state.totalXp).level;
 
     saveState(state);
@@ -323,14 +337,15 @@ export default function CheckinPage() {
     }
 
     // Pick contextual quote based on result
+    const xpDelta = newDayXp - oldDayXp;
     const hasAnyMiss = allAnsweredBinary.some((h) => entries.get(h.id)?.status === "missed");
     const hasStreakMilestone = streakUpdates.some((s) => [7, 14, 30, 60, 90].includes(s.days));
     const quoteContext = hasAnyMiss ? "after_miss" : hasStreakMilestone ? "streak_milestone" : "default";
 
     setResult({
-      xpEarned: xp,
+      xpEarned: xpDelta,
       streakUpdates: streakUpdates.slice(0, 4),
-      bareMinimumMet: bareMinDone,
+      bareMinimumMet: allBareMinDone,
       quote: getContextualQuote(quoteContext).text,
     });
     setPhase("result");
