@@ -1058,108 +1058,109 @@ export default function CheckinPage() {
         </section>
       )}
 
-      {/* ─── Admin Tasks (stack-independent) ─────────────── */}
-      {(adminTasks.length > 0 || showAdminInput) && (
-        <section className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
-              📋 Admin ({adminTasks.filter((t) => t.completed).length}/{adminTasks.length})
-            </h2>
+      {/* ─── Admin Tasks (stack-independent, always visible) ── */}
+      <section className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
+            📋 Admin ({adminTasks.filter((t) => t.completed).length}/{adminTasks.length})
+          </h2>
+          <div className="flex items-center gap-2">
             {!showAdminInput && (
               <button
                 onClick={() => setShowAdminInput(true)}
-                className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+                className="text-[10px] text-brand hover:text-brand-light font-medium"
               >
-                + Add
+                + Quick add
               </button>
             )}
+            <a href="/admin" className="text-[10px] text-blue-400 hover:text-blue-300 font-medium">
+              Manage →
+            </a>
           </div>
-          <div className="rounded-xl bg-surface-800 border border-blue-900/30 p-3 space-y-1.5">
-            {adminTasks.map((task) => (
-              <div key={task.id} className="flex items-center gap-2 group">
-                <button
-                  onClick={() => {
-                    toggleAdminTask(task.id);
+        </div>
+        <div className="rounded-xl bg-surface-800 border border-blue-900/30 p-3 space-y-1.5">
+          {showAdminInput && (
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="text"
+                value={newAdminText}
+                onChange={(e) => setNewAdminText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newAdminText.trim()) {
+                    addAdminTask(newAdminText.trim(), "adhoc");
                     setAdminTasks(loadAdminTasks());
-                  }}
-                  className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 transition-colors ${
-                    task.completed
-                      ? "bg-done/20 text-done"
-                      : "bg-surface-700 text-neutral-600 hover:text-neutral-400"
-                  }`}
-                >
-                  {task.completed ? "✓" : ""}
-                </button>
-                <span className={`text-sm flex-1 ${task.completed ? "line-through text-neutral-600" : "text-neutral-300"}`}>
-                  {task.title}
-                </span>
-                {task.source === "planned" && !task.completed && (
-                  <span className="text-[9px] text-blue-500/60 shrink-0">planned</span>
-                )}
-                <button
-                  onClick={() => {
-                    removeAdminTask(task.id);
+                    setNewAdminText("");
+                  }
+                }}
+                placeholder="Add a task for today..."
+                autoFocus
+                className="flex-1 bg-surface-700 rounded-lg px-3 py-1.5 text-sm text-white border-none outline-none focus:ring-1 focus:ring-blue-500/50 placeholder:text-neutral-600"
+              />
+              <button
+                onClick={() => {
+                  if (newAdminText.trim()) {
+                    addAdminTask(newAdminText.trim(), "adhoc");
                     setAdminTasks(loadAdminTasks());
-                  }}
-                  className="text-neutral-700 hover:text-missed text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-            {showAdminInput && (
-              <div className="flex items-center gap-2 mt-2">
-                <input
-                  type="text"
-                  value={newAdminText}
-                  onChange={(e) => setNewAdminText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && newAdminText.trim()) {
-                      addAdminTask(newAdminText.trim(), "adhoc");
-                      setAdminTasks(loadAdminTasks());
-                      setNewAdminText("");
-                    }
-                  }}
-                  placeholder="Add a task..."
-                  autoFocus
-                  className="flex-1 bg-surface-700 rounded-lg px-3 py-1.5 text-sm text-white border-none outline-none focus:ring-1 focus:ring-blue-500/50 placeholder:text-neutral-600"
-                />
-                <button
-                  onClick={() => {
-                    if (newAdminText.trim()) {
-                      addAdminTask(newAdminText.trim(), "adhoc");
-                      setAdminTasks(loadAdminTasks());
-                      setNewAdminText("");
-                    }
-                  }}
-                  className="text-xs text-blue-400 hover:text-blue-300 font-medium px-2"
-                >
-                  Add
-                </button>
-                <button
-                  onClick={() => { setShowAdminInput(false); setNewAdminText(""); }}
-                  className="text-xs text-neutral-600 hover:text-neutral-400 px-1"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            {adminTasks.length === 0 && !showAdminInput && (
-              <p className="text-xs text-neutral-600 text-center py-2">No admin tasks today</p>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* Quick add admin button when no tasks exist */}
-      {adminTasks.length === 0 && !showAdminInput && (
-        <button
-          onClick={() => setShowAdminInput(true)}
-          className="w-full mb-6 py-2.5 rounded-xl border border-dashed border-surface-600 text-xs text-neutral-600 hover:text-blue-400 hover:border-blue-900/40 transition-colors"
-        >
-          📋 + Add admin task
-        </button>
-      )}
+                    setNewAdminText("");
+                  }
+                }}
+                className="text-xs text-blue-400 hover:text-blue-300 font-medium px-2"
+              >
+                Add
+              </button>
+              <button
+                onClick={() => { setShowAdminInput(false); setNewAdminText(""); }}
+                className="text-xs text-neutral-600 hover:text-neutral-400 px-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {adminTasks.map((task) => (
+            <div key={task.id} className="flex items-center gap-2 group">
+              <button
+                onClick={() => {
+                  toggleAdminTask(task.id);
+                  setAdminTasks(loadAdminTasks());
+                }}
+                className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 transition-colors ${
+                  task.completed
+                    ? "bg-done/20 text-done"
+                    : "bg-surface-700 text-neutral-600 hover:text-neutral-400"
+                }`}
+              >
+                {task.completed ? "✓" : ""}
+              </button>
+              <span className={`text-sm flex-1 ${task.completed ? "line-through text-neutral-600" : "text-neutral-300"}`}>
+                {task.title}
+              </span>
+              {task.inBacklog && !task.completed && (
+                <span className="text-[9px] text-blue-500/50 shrink-0">backlog</span>
+              )}
+              {task.source === "planned" && !task.completed && (
+                <span className="text-[9px] text-amber-500/50 shrink-0">planned</span>
+              )}
+              <button
+                onClick={() => {
+                  removeAdminTask(task.id);
+                  setAdminTasks(loadAdminTasks());
+                }}
+                className="text-neutral-700 hover:text-missed text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {adminTasks.length === 0 && !showAdminInput && (
+            <div className="text-center py-3">
+              <p className="text-xs text-neutral-600 mb-1">No tasks focused for today</p>
+              <a href="/admin" className="text-[10px] text-blue-400 hover:text-blue-300">
+                Open Admin to focus from your backlog →
+              </a>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Bad Habit Cards */}
       {badHabits.length > 0 && (

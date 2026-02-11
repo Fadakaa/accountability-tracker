@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState, getTodayLog, getLevelForXP, loadSettings, recalculateStreaks, saveState, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask } from "@/lib/store";
+import { loadState, getTodayLog, getLevelForXP, loadSettings, recalculateStreaks, saveState, loadAdminTasks } from "@/lib/store";
 import type { LocalState, AdminTask } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
@@ -16,7 +16,6 @@ export default function Home() {
   const [state, setState] = useState<LocalState | null>(null);
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
-  const [newAdminText, setNewAdminText] = useState("");
 
   useEffect(() => {
     // Load state and recalculate streaks from log history (source of truth)
@@ -195,70 +194,53 @@ export default function Home() {
         <ProgressRing label="Stretch" done={stretchDone} total={stretchHabits.length} color="#eab308" />
       </section>
 
-      {/* Admin Tasks — interactive inline card */}
-      {adminTasks.length > 0 && (
-        <section className="rounded-xl bg-surface-800 border border-blue-900/30 p-4 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
-              📋 Admin Today
-            </h2>
-            <span className="text-xs text-blue-400 font-bold">
-              {adminTasks.filter((t) => t.completed).length}/{adminTasks.length}
-            </span>
-          </div>
-          {/* Progress bar */}
-          <div className="w-full h-1.5 rounded-full bg-surface-700 mb-3">
-            <div
-              className="h-full rounded-full bg-blue-500 transition-all"
-              style={{ width: `${adminTasks.length > 0 ? (adminTasks.filter((t) => t.completed).length / adminTasks.length) * 100 : 0}%` }}
-            />
-          </div>
-          <div className="space-y-1.5">
-            {adminTasks.slice(0, 5).map((task) => (
-              <div key={task.id} className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    toggleAdminTask(task.id);
-                    setAdminTasks(loadAdminTasks());
-                  }}
-                  className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold shrink-0 transition-colors ${
-                    task.completed
-                      ? "bg-done/20 text-done"
-                      : "bg-surface-600 text-neutral-700"
-                  }`}
-                >
-                  {task.completed ? "✓" : ""}
-                </button>
-                <span className={`text-xs flex-1 ${task.completed ? "line-through text-neutral-600" : "text-neutral-300"}`}>
-                  {task.title}
+      {/* Admin Tasks — always visible, links to /admin */}
+      <a href="/admin" className="block rounded-xl bg-surface-800 border border-blue-900/30 p-4 mb-6 hover:bg-surface-700/80 transition-colors">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
+            📋 General Admin
+          </h2>
+          <span className="text-[10px] text-neutral-500">
+            {adminTasks.length > 0
+              ? `${adminTasks.filter((t) => t.completed).length}/${adminTasks.length} done`
+              : "Tap to manage →"}
+          </span>
+        </div>
+        {adminTasks.length > 0 ? (
+          <>
+            {/* Progress bar */}
+            <div className="w-full h-1.5 rounded-full bg-surface-700 mb-2">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all"
+                style={{ width: `${(adminTasks.filter((t) => t.completed).length / adminTasks.length) * 100}%` }}
+              />
+            </div>
+            <div className="space-y-1">
+              {adminTasks.slice(0, 4).map((task) => (
+                <div key={task.id} className="flex items-center gap-2">
+                  <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[8px] font-bold shrink-0 ${
+                    task.completed ? "bg-done/20 text-done" : "bg-surface-600 text-neutral-700"
+                  }`}>
+                    {task.completed ? "✓" : ""}
+                  </span>
+                  <span className={`text-xs flex-1 truncate ${task.completed ? "line-through text-neutral-600" : "text-neutral-300"}`}>
+                    {task.title}
+                  </span>
+                </div>
+              ))}
+              {adminTasks.length > 4 && (
+                <span className="text-[10px] text-blue-500">
+                  +{adminTasks.length - 4} more
                 </span>
-              </div>
-            ))}
-            {adminTasks.length > 5 && (
-              <a href="/checkin" className="text-[10px] text-blue-500 hover:text-blue-400">
-                +{adminTasks.length - 5} more — view in check-in
-              </a>
-            )}
-          </div>
-          {/* Inline add */}
-          <div className="flex items-center gap-2 mt-3 pt-2 border-t border-surface-700">
-            <input
-              type="text"
-              value={newAdminText}
-              onChange={(e) => setNewAdminText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newAdminText.trim()) {
-                  addAdminTask(newAdminText.trim(), "adhoc");
-                  setAdminTasks(loadAdminTasks());
-                  setNewAdminText("");
-                }
-              }}
-              placeholder="+ Add task..."
-              className="flex-1 bg-transparent text-xs text-white outline-none placeholder:text-neutral-600"
-            />
-          </div>
-        </section>
-      )}
+              )}
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-neutral-600">
+            No tasks for today. Tap to add tasks or focus from your backlog.
+          </p>
+        )}
+      </a>
 
       {/* Top Streaks — Dynamic */}
       <section className="mb-6">
@@ -336,8 +318,9 @@ export default function Home() {
           <h3 className="text-[9px] font-bold text-brand uppercase tracking-[0.15em] mb-2 px-1">
             Execute
           </h3>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <NavTile icon="📝" label="Check In" href="/checkin" accent />
+            <NavTile icon="📋" label="Admin" href="/admin" />
             <NavTile icon="🏋️" label="Gym Log" href="/gym" />
             <NavTile icon="🚀" label="Sprint" href="/sprint" />
           </div>

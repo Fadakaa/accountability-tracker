@@ -62,10 +62,23 @@ export interface AdminTask {
   id: string;
   title: string;
   completed: boolean;
-  date: string;           // YYYY-MM-DD — the day this task is for
-  source: "adhoc" | "planned"; // planned = from Plan Tomorrow, adhoc = added during the day
+  date: string;           // YYYY-MM-DD — the day this task is focused for (or "" for backlog-only)
+  source: "adhoc" | "planned" | "backlog"; // backlog = persistent, adhoc = added today, planned = from Plan Tomorrow
   completedAt: string | null;
   createdAt: string;
+  inBacklog: boolean;     // true = lives in backlog (may also be focused today)
+}
+
+// ─── Admin Task Store ─────────────────────────────────────────
+// Two views:
+//   Backlog: all tasks where inBacklog=true and not completed
+//   Today:   all tasks where date === today (focused from backlog or added ad-hoc)
+// Tasks can be in backlog AND focused today simultaneously.
+// Completing a focused task also marks it done in the backlog.
+
+// Normalize tasks from storage (backward compat — old tasks lack inBacklog)
+function normalizeTask(t: AdminTask): AdminTask {
+  return { ...t, inBacklog: t.inBacklog ?? false };
 }
 
 export function loadAdminTasks(date?: string): AdminTask[] {
@@ -73,7 +86,7 @@ export function loadAdminTasks(date?: string): AdminTask[] {
   try {
     const raw = localStorage.getItem(ADMIN_KEY);
     if (!raw) return [];
-    const all: AdminTask[] = JSON.parse(raw);
+    const all: AdminTask[] = (JSON.parse(raw) as AdminTask[]).map(normalizeTask);
     const target = date ?? getToday();
     return all.filter((t) => t.date === target);
   } catch {
@@ -81,40 +94,79 @@ export function loadAdminTasks(date?: string): AdminTask[] {
   }
 }
 
-function loadAllAdminTasks(): AdminTask[] {
+export function loadAdminBacklog(): AdminTask[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(ADMIN_KEY);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const all: AdminTask[] = (JSON.parse(raw) as AdminTask[]).map(normalizeTask);
+    return all.filter((t) => t.inBacklog && !t.completed);
+  } catch {
+    return [];
+  }
+}
+
+export function loadAllAdminTasks(): AdminTask[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(ADMIN_KEY);
+    if (!raw) return [];
+    return (JSON.parse(raw) as AdminTask[]).map(normalizeTask);
   } catch {
     return [];
   }
 }
 
 function saveAllAdminTasks(tasks: AdminTask[]): void {
-  // Auto-clean tasks older than 7 days
+  // Auto-clean completed backlog tasks older than 30 days
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 7);
+  cutoff.setDate(cutoff.getDate() - 30);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
-  const cleaned = tasks.filter((t) => t.date >= cutoffStr);
+  const cleaned = tasks.filter((t) => {
+    // Keep all uncompleted tasks
+    if (!t.completed) return true;
+    // Keep completed tasks from the last 30 days
+    return (t.completedAt ?? t.createdAt) >= cutoffStr;
+  });
   localStorage.setItem(ADMIN_KEY, JSON.stringify(cleaned));
 }
 
-export function addAdminTask(title: string, source: "adhoc" | "planned", date?: string): AdminTask {
+export function addAdminTask(title: string, source: "adhoc" | "planned" | "backlog", date?: string): AdminTask {
   const all = loadAllAdminTasks();
+  const isBacklog = source === "backlog";
   const task: AdminTask = {
     id: `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     title: title.trim(),
     completed: false,
-    date: date ?? getToday(),
+    date: isBacklog ? "" : (date ?? getToday()),
     source,
     completedAt: null,
     createdAt: new Date().toISOString(),
+    inBacklog: isBacklog,
   };
   all.push(task);
   saveAllAdminTasks(all);
   return task;
+}
+
+// Focus a backlog task for today — creates today's entry referencing the backlog item
+export function focusBacklogTask(taskId: string): void {
+  const all = loadAllAdminTasks();
+  const task = all.find((t) => t.id === taskId);
+  if (task) {
+    task.date = getToday();
+  }
+  saveAllAdminTasks(all);
+}
+
+// Unfocus a backlog task (remove from today, keep in backlog)
+export function unfocusBacklogTask(taskId: string): void {
+  const all = loadAllAdminTasks();
+  const task = all.find((t) => t.id === taskId);
+  if (task && task.inBacklog) {
+    task.date = "";
+  }
+  saveAllAdminTasks(all);
 }
 
 export function toggleAdminTask(taskId: string): void {
@@ -144,6 +196,21 @@ export function getTomorrowDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+// Get completed admin history for insights
+export function getCompletedAdminHistory(): { date: string; completed: number; total: number }[] {
+  const all = loadAllAdminTasks();
+  const byDate: Record<string, { completed: number; total: number }> = {};
+  for (const t of all) {
+    if (!t.date) continue;
+    if (!byDate[t.date]) byDate[t.date] = { completed: 0, total: 0 };
+    byDate[t.date].total++;
+    if (t.completed) byDate[t.date].completed++;
+  }
+  return Object.entries(byDate)
+    .map(([date, stats]) => ({ date, ...stats }))
+    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 export interface DayLog {
