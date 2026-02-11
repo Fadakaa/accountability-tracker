@@ -387,24 +387,50 @@ export default function CheckinPage() {
     setPhase("result");
   }
 
-  // ─── Day Already Complete Guard ──────────────────────────────
-  // When navigating to checkin and day is already fully done, show lock screen
-  const [dayAlreadyComplete, setDayAlreadyComplete] = useState(false);
+  // ─── Stack Already Submitted Guard ──────────────────────────────
+  // When revisiting a stack that was already logged, show lock screen with edit option
+  const [stackAlreadyDone, setStackAlreadyDone] = useState(false);
+  const [wholeDayDone, setWholeDayDone] = useState(false);
   useEffect(() => {
     const s = loadState();
-    if (isDayFullyComplete(s) && phase === "checkin") {
-      setDayAlreadyComplete(true);
-    }
-  }, [phase]);
-
-  if (dayAlreadyComplete && phase === "checkin") {
     const today = getToday();
+    const existingLog = s.logs.find((l) => l.date === today);
+    if (!existingLog || phase !== "checkin") return;
+
+    // Check if ALL habits in the current stack have already been answered
+    const stackBinary = stackHabits.filter((h) => h.category === "binary");
+    const stackBad = stackHabits.filter((h) => h.category === "bad");
+
+    const allBinaryAnswered = stackBinary.length > 0 && stackBinary.every((h) => {
+      const entry = existingLog.entries[h.id];
+      return entry && (entry.status === "done" || entry.status === "missed");
+    });
+    const allBadAnswered = stackBad.length === 0 || stackBad.every((h) => {
+      const entry = existingLog.badEntries[h.id];
+      return entry && entry.occurred !== undefined && entry.occurred !== null;
+    });
+
+    if (allBinaryAnswered && allBadAnswered) {
+      setStackAlreadyDone(true);
+    }
+    if (isDayFullyComplete(s)) {
+      setWholeDayDone(true);
+    }
+  }, [stackHabits, phase]);
+
+  if (stackAlreadyDone && phase === "checkin") {
+    const today = getToday();
+    const stackLabel = activeStack === "morning" ? "Morning" : activeStack === "midday" ? "Midday" : "Evening";
     return (
       <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
-        <div className="text-6xl mb-6">🌳</div>
-        <h1 className="text-2xl font-black text-white mb-2">Day Complete</h1>
+        <div className="text-6xl mb-6">{wholeDayDone ? "🌳" : "✅"}</div>
+        <h1 className="text-2xl font-black text-white mb-2">
+          {wholeDayDone ? "Day Complete" : `${stackLabel} Done`}
+        </h1>
         <p className="text-sm text-neutral-400 mb-8">
-          All habits have been logged for today. Your tree is growing.
+          {wholeDayDone
+            ? "All habits have been logged for today. Your tree is growing."
+            : `You've already submitted your ${stackLabel.toLowerCase()} check-in.`}
         </p>
         <div className="w-full max-w-xs space-y-3">
           <a
@@ -420,10 +446,10 @@ export default function CheckinPage() {
             Back to Dashboard
           </a>
           <button
-            onClick={() => setDayAlreadyComplete(false)}
+            onClick={() => setStackAlreadyDone(false)}
             className="w-full text-xs text-neutral-600 hover:text-neutral-400 transition-colors mt-2"
           >
-            Override — log anyway
+            Override — log again
           </button>
         </div>
       </div>
