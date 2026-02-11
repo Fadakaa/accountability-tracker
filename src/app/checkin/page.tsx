@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES } from "@/lib/habits";
+import { getHabitLevel, getRandomQuote, getContextualQuote, getQuoteOfTheDay, getFlameIcon, XP_VALUES } from "@/lib/habits";
 import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateDayXP } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
@@ -388,60 +388,155 @@ export default function CheckinPage() {
   }
 
   // ─── Stack Already Submitted Guard ──────────────────────────────
-  // When revisiting a stack that was already logged, show lock screen with edit option
+  // When revisiting a stack that was already logged, show lock screen
   const [stackAlreadyDone, setStackAlreadyDone] = useState(false);
   const [wholeDayDone, setWholeDayDone] = useState(false);
+  const [lockScreenStats, setLockScreenStats] = useState<{
+    done: number; missed: number; later: number; total: number;
+    badClean: number; badSlipped: number;
+  } | null>(null);
+
   useEffect(() => {
+    if (phase !== "checkin") return;
     const s = loadState();
     const today = getToday();
     const existingLog = s.logs.find((l) => l.date === today);
-    if (!existingLog || phase !== "checkin") return;
+    if (!existingLog) return;
+    if (stackHabits.length === 0) return;
 
-    // Check if ALL habits in the current stack have already been answered
+    // Check every habit type in this stack
     const stackBinary = stackHabits.filter((h) => h.category === "binary");
+    const stackMeasured = stackHabits.filter((h) => h.category === "measured");
     const stackBad = stackHabits.filter((h) => h.category === "bad");
 
-    const allBinaryAnswered = stackBinary.length > 0 && stackBinary.every((h) => {
+    // Binary: any status (done/missed/later) means it was submitted
+    const allBinarySubmitted = stackBinary.every((h) => {
       const entry = existingLog.entries[h.id];
-      return entry && (entry.status === "done" || entry.status === "missed");
-    });
-    const allBadAnswered = stackBad.length === 0 || stackBad.every((h) => {
-      const entry = existingLog.badEntries[h.id];
-      return entry && entry.occurred !== undefined && entry.occurred !== null;
+      return entry && entry.status != null;
     });
 
-    if (allBinaryAnswered && allBadAnswered) {
+    // Measured: has a value logged
+    const allMeasuredSubmitted = stackMeasured.every((h) => {
+      const entry = existingLog.entries[h.id];
+      return entry && entry.value != null;
+    });
+
+    // Bad: occurred is set (true or false)
+    const allBadSubmitted = stackBad.every((h) => {
+      const entry = existingLog.badEntries[h.id];
+      return entry && entry.occurred != null;
+    });
+
+    if (allBinarySubmitted && allMeasuredSubmitted && allBadSubmitted) {
+      // Build summary stats
+      let done = 0, missed = 0, later = 0, badClean = 0, badSlipped = 0;
+      for (const h of stackBinary) {
+        const st = existingLog.entries[h.id]?.status;
+        if (st === "done") done++;
+        else if (st === "missed") missed++;
+        else if (st === "later") later++;
+      }
+      for (const h of stackBad) {
+        if (existingLog.badEntries[h.id]?.occurred) badSlipped++;
+        else badClean++;
+      }
+      setLockScreenStats({ done, missed, later, total: stackBinary.length, badClean, badSlipped });
       setStackAlreadyDone(true);
+    } else {
+      setStackAlreadyDone(false);
+      setLockScreenStats(null);
     }
-    if (isDayFullyComplete(s)) {
-      setWholeDayDone(true);
-    }
-  }, [stackHabits, phase]);
+
+    setWholeDayDone(isDayFullyComplete(s));
+  }, [stackHabits, phase, activeStack]);
 
   if (stackAlreadyDone && phase === "checkin") {
     const today = getToday();
     const stackLabel = activeStack === "morning" ? "Morning" : activeStack === "midday" ? "Midday" : "Evening";
+    const stackEmoji = activeStack === "morning" ? "🌅" : activeStack === "midday" ? "☀️" : "🌙";
+    const nextStack = activeStack === "morning" ? "midday" : activeStack === "midday" ? "evening" : null;
+    const nextStackLabel = nextStack === "midday" ? "Afternoon" : nextStack === "evening" ? "Evening" : null;
+    const quote = getQuoteOfTheDay();
+    const st = lockScreenStats;
+
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
-        <div className="text-6xl mb-6">{wholeDayDone ? "🌳" : "✅"}</div>
-        <h1 className="text-2xl font-black text-white mb-2">
-          {wholeDayDone ? "Day Complete" : `${stackLabel} Done`}
+      <div className="flex flex-col items-center min-h-screen px-6 py-10">
+        {/* Header */}
+        <div className="text-5xl mb-4">{wholeDayDone ? "🌳" : stackEmoji}</div>
+        <h1 className="text-2xl font-black text-white mb-1">
+          {wholeDayDone ? "Day Complete" : `${stackLabel} Logged`}
         </h1>
-        <p className="text-sm text-neutral-400 mb-8">
+        <p className="text-sm text-neutral-400 mb-6">
           {wholeDayDone
-            ? "All habits have been logged for today. Your tree is growing."
-            : `You've already submitted your ${stackLabel.toLowerCase()} check-in.`}
+            ? "All habits have been logged for today."
+            : `Your ${stackLabel.toLowerCase()} check-in is already submitted.`}
         </p>
-        <div className="w-full max-w-xs space-y-3">
+
+        {/* Quote / Life Tip */}
+        <div className="w-full max-w-sm rounded-xl bg-surface-800/60 border border-surface-700 p-4 mb-6">
+          <p className="text-xs text-neutral-500 uppercase tracking-wider mb-2 font-bold">
+            {quote.category === "prompt" ? "Reflect" : "Remember"}
+          </p>
+          <p className="text-sm text-neutral-300 italic leading-relaxed">
+            &ldquo;{quote.text}&rdquo;
+          </p>
+        </div>
+
+        {/* Stack Summary */}
+        {st && (st.total > 0 || st.badClean + st.badSlipped > 0) && (
+          <div className="w-full max-w-sm rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+            <p className="text-xs text-neutral-500 uppercase tracking-wider mb-3 font-bold">
+              {stackLabel} Summary
+            </p>
+            <div className="grid grid-cols-3 gap-3 text-center mb-3">
+              {st.done > 0 && (
+                <div className="rounded-lg bg-done/10 border border-done/20 py-2">
+                  <div className="text-lg font-black text-done">{st.done}</div>
+                  <div className="text-[10px] text-done/70 font-medium">Done</div>
+                </div>
+              )}
+              {st.missed > 0 && (
+                <div className="rounded-lg bg-missed/10 border border-missed/20 py-2">
+                  <div className="text-lg font-black text-missed">{st.missed}</div>
+                  <div className="text-[10px] text-missed/70 font-medium">Missed</div>
+                </div>
+              )}
+              {st.later > 0 && (
+                <div className="rounded-lg bg-later/10 border border-later/20 py-2">
+                  <div className="text-lg font-black text-later">{st.later}</div>
+                  <div className="text-[10px] text-later/70 font-medium">Later</div>
+                </div>
+              )}
+            </div>
+            {(st.badClean + st.badSlipped > 0) && (
+              <div className="flex items-center gap-2 text-xs text-neutral-400 pt-2 border-t border-surface-700">
+                <span>Bad habits:</span>
+                {st.badClean > 0 && <span className="text-done">✅ {st.badClean} clean</span>}
+                {st.badSlipped > 0 && <span className="text-missed">🚩 {st.badSlipped} slipped</span>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="w-full max-w-sm space-y-3 mt-auto">
           <a
             href={`/edit-log?date=${today}`}
-            className="block w-full rounded-xl py-4 text-sm font-bold bg-brand hover:bg-brand-dark text-white transition-all active:scale-[0.98]"
+            className="block w-full rounded-xl py-4 text-sm font-bold bg-brand hover:bg-brand-dark text-white text-center transition-all active:scale-[0.98]"
           >
-            Edit Today&apos;s Inputs
+            Edit Today&apos;s Answers
           </a>
+          {nextStack && !wholeDayDone && (
+            <button
+              onClick={() => { setStackAlreadyDone(false); setActiveStack(nextStack); }}
+              className="block w-full rounded-xl py-3.5 text-sm font-bold bg-surface-700 hover:bg-surface-600 text-white text-center transition-all active:scale-[0.98]"
+            >
+              Move to {nextStackLabel} →
+            </button>
+          )}
           <a
             href="/"
-            className="block w-full rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 text-neutral-300 transition-all active:scale-[0.98]"
+            className="block w-full rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 text-neutral-300 text-center transition-all active:scale-[0.98]"
           >
             Back to Dashboard
           </a>
