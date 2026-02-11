@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings, saveSettings } from "@/lib/store";
-import type { UserSettings, HabitOverride } from "@/lib/store";
+import { loadSettings, saveSettings, loadState } from "@/lib/store";
+import type { UserSettings, HabitOverride, LocalState } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -19,10 +19,12 @@ const STACKS: { key: HabitStack; label: string; icon: string }[] = [
 export default function SettingsPage() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [habits, setHabits] = useState<Habit[]>([]);
+  const [trackerState, setTrackerState] = useState<LocalState | null>(null);
 
   useEffect(() => {
     setSettings(loadSettings());
     setHabits(getResolvedHabits());
+    setTrackerState(loadState());
   }, []);
 
   if (!settings) return null;
@@ -174,6 +176,13 @@ export default function SettingsPage() {
                       updateHabit(habit.id, { treeBranch: branchId });
                     }}
                     onDeactivate={() => {
+                      const streak = trackerState?.streaks[habit.slug] ?? 0;
+                      if (streak > 0) {
+                        const confirmed = window.confirm(
+                          `${habit.name} has a ${streak}-day streak. Deactivating will pause tracking but your history is preserved. Continue?`
+                        );
+                        if (!confirmed) return;
+                      }
                       updateHabit(habit.id, { is_active: false });
                     }}
                     onMoveUp={() => moveHabit(habit, "up")}

@@ -21,6 +21,17 @@ export function getResolvedHabits(): Habit[] {
   }).sort((a, b) => a.sort_order - b.sort_order);
 }
 
+/** Returns all habits (active + inactive) that appear in at least one log entry */
+export function getHabitsWithHistory(logs: { entries: Record<string, unknown>; badEntries: Record<string, unknown> }[]): Habit[] {
+  const allHabits = getResolvedHabits();
+  const loggedIds = new Set<string>();
+  for (const log of logs) {
+    for (const id of Object.keys(log.entries)) loggedIds.add(id);
+    for (const id of Object.keys(log.badEntries)) loggedIds.add(id);
+  }
+  return allHabits.filter((h) => h.is_active || loggedIds.has(h.id));
+}
+
 export function getResolvedHabitsByStack(stack: HabitStack): Habit[] {
   return getResolvedHabits().filter((h) => h.stack === stack && h.is_active);
 }

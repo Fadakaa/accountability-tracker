@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { loadState, loadGymSessions, getLevelForXP } from "@/lib/store";
 import type { LocalState, GymSessionLocal } from "@/lib/store";
-import { getResolvedHabits } from "@/lib/resolvedHabits";
+import { getResolvedHabits, getHabitsWithHistory } from "@/lib/resolvedHabits";
 import {
   getCompletionByDay,
   getWeeklyGameData,
@@ -121,10 +121,10 @@ export default function InsightsPage() {
     [singleHabitData]
   );
 
-  // Filterable habit lists
-  const activeHabits = useMemo(
-    () => habits.filter((h) => h.is_active),
-    [habits]
+  // Filterable habit lists — includes inactive habits that have history
+  const filterableHabits = useMemo(
+    () => (state ? getHabitsWithHistory(state.logs) : habits.filter((h) => h.is_active)),
+    [state, habits]
   );
 
   if (!state) return null;
@@ -160,7 +160,7 @@ export default function InsightsPage() {
 
       {/* Habit Filter */}
       <HabitFilter
-        habits={activeHabits}
+        habits={filterableHabits}
         selectedId={selectedHabitId}
         onSelect={(id) => setSelectedHabitId(id === selectedHabitId ? null : id)}
       />
@@ -615,17 +615,21 @@ function HabitFilterChip({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const isArchived = !habit.is_active;
   return (
     <button
       onClick={onSelect}
       className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all active:scale-95 ${
         isSelected
           ? "bg-brand text-white ring-1 ring-brand"
-          : "bg-surface-700 text-neutral-400 hover:text-neutral-200 hover:bg-surface-600"
+          : isArchived
+            ? "bg-surface-700/50 text-neutral-600 hover:text-neutral-400 hover:bg-surface-600 border border-dashed border-surface-600"
+            : "bg-surface-700 text-neutral-400 hover:text-neutral-200 hover:bg-surface-600"
       }`}
     >
       <span>{habit.icon}</span>
       <span>{habit.name}</span>
+      {isArchived && <span className="text-[8px] text-neutral-600 ml-0.5">OFF</span>}
     </button>
   );
 }
