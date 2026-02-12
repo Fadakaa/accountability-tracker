@@ -7,6 +7,7 @@ import type { DayLog, DeferredHabit, AdminTask } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
 import { isHabitWeak } from "@/lib/weakness";
 import { startEscalation, resolveEscalation, syncCompletionToServiceWorker } from "@/lib/notifications";
+import { apiUrl } from "@/lib/api";
 import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
 
@@ -300,7 +301,7 @@ export default function CheckinPage() {
     if (status === "later") {
       // No stacks to defer to (evening) or sprint singleCheckin — escalate immediately
       startEscalation(habitId, habit.name, habit.icon || "");
-      fetch("/api/notify/escalate", {
+      fetch(apiUrl("/api/notify/escalate"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
@@ -325,7 +326,7 @@ export default function CheckinPage() {
     if (habit) {
       // Start Fibonacci escalation
       startEscalation(deferModalHabitId, habit.name, habit.icon || "");
-      fetch("/api/notify/escalate", {
+      fetch(apiUrl("/api/notify/escalate"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),

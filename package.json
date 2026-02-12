@@ -6,9 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "build:cap": "mv src/app/api src/app/_api_backup && CAPACITOR_BUILD=true next build; mv src/app/_api_backup src/app/api",
+    "cap:sync": "npx cap sync",
+    "cap:ios": "npm run build:cap && npx cap sync ios && npx cap open ios",
+    "cap:android": "npm run build:cap && npx cap sync android && npx cap open android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/cli": "^8.1.0",
+    "@capacitor/core": "^8.1.0",
+    "@capacitor/ios": "^8.1.0",
     "@supabase/supabase-js": "^2.95.3",
     "next": "^16.1.6",
     "react": "^19.2.4",

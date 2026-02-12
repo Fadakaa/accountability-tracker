@@ -9,6 +9,7 @@ import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel } from "@/lib/habits";
 import type { Habit, HabitStack } from "@/types/database";
 import { syncScheduleToServiceWorker } from "@/lib/notifications";
+import { apiUrl } from "@/lib/api";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -523,7 +524,7 @@ function NotificationSection() {
     setTestStatus("sending");
     setErrorMsg("");
     try {
-      const res = await fetch("/api/notify/test", { method: "POST" });
+      const res = await fetch(apiUrl("/api/notify/test"), { method: "POST" });
       const data = await res.json();
       if (res.ok) {
         setTestStatus("sent");
@@ -692,7 +693,7 @@ function NotificationScheduleEditor() {
   async function syncSchedule() {
     // Call the sync API to update the server-side schedule
     try {
-      const res = await fetch("/api/notify/sync-schedule", {
+      const res = await fetch(apiUrl("/api/notify/sync-schedule"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slots: slots.filter((s) => s.enabled) }),

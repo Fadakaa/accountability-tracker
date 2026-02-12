@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { apiUrl } from "@/lib/api";
 
 export default function NotificationBanner() {
   const [dismissed, setDismissed] = useState(false);
@@ -23,7 +24,7 @@ export default function NotificationBanner() {
   async function handleTest() {
     setTestStatus("sending");
     try {
-      const res = await fetch("/api/notify/test", { method: "POST" });
+      const res = await fetch(apiUrl("/api/notify/test"), { method: "POST" });
       if (res.ok) {
         setTestStatus("sent");
         setTimeout(() => {
