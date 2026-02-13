@@ -112,7 +112,10 @@ self.addEventListener("message", (event) => {
 });
 
 // ─── Background Notification Scheduler ──────────────────────
-// Default schedule if none received from app
+// Fallback schedule — only used before the app sends SET_SCHEDULE.
+// Must match the defaults in store.ts UserSettings.checkinTimes.
+// The app always syncs its real schedule on load, so this is
+// just a safety net for the brief period before first sync.
 const DEFAULT_SCHEDULE = {
   morning: "07:00",
   midday: "13:00",

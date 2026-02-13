@@ -10,6 +10,7 @@ import { startEscalation, resolveEscalation, syncCompletionToServiceWorker } fro
 import { apiUrl } from "@/lib/api";
 import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
+import { getCurrentStack, getGreeting, getGreetingEmoji, getLaterStacks, STACK_ORDER, isStackAnswered, areAllStacksAnswered } from "@/lib/schedule";
 
 // ─── Types ──────────────────────────────────────────────────
 type CheckinEntry = {
@@ -32,28 +33,6 @@ type SubmissionResult = {
   adminDone?: number;
   adminTotal?: number;
 };
-
-// ─── Helpers ────────────────────────────────────────────────
-function getCurrentStack(): HabitStack {
-  const hour = new Date().getHours();
-  if (hour < 12) return "morning";
-  if (hour < 18) return "midday";
-  return "evening";
-}
-
-function getGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning Michael";
-  if (hour < 18) return "Afternoon check-in";
-  return "Evening wrap-up";
-}
-
-function getGreetingEmoji(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "🌅";
-  if (hour < 18) return "💪";
-  return "🌙";
-}
 
 // ─── Component ──────────────────────────────────────────────
 export default function CheckinPage() {
@@ -158,11 +137,8 @@ export default function CheckinPage() {
     const stackBad = stackHabits.filter((h) => h.category === "bad" && h.is_active);
     const stackMeasured = stackHabits.filter((h) => h.category === "measured" && h.is_active);
 
-    // Check if every binary has a status and every bad has an occurred value
-    const allBinaryAnswered = stackBinary.length > 0 && stackBinary.every((h) => {
-      const entry = todayLog.entries[h.id];
-      return entry && (entry.status === "done" || entry.status === "missed" || entry.status === "later");
-    });
+    // Check if every binary has been responded to (uses shared service)
+    const allBinaryAnswered = isStackAnswered(stack, todayLog, stackHabits);
     const allBadAnswered = stackBad.length === 0 || stackBad.every((h) => {
       const entry = todayLog.badEntries[h.id];
       return entry && (entry.occurred === true || entry.occurred === false);
@@ -190,23 +166,15 @@ export default function CheckinPage() {
       setLockSummary({ done, missed, later, cleanBad, slippedBad, measuredCount, totalXp: todayLog.xpEarned, bareMinStreak: s.bareMinimumStreak ?? 0 });
       setStackAlreadyDone(true);
 
-      // Check if ALL stacks are done (excluding deferred-away habits)
-      const allStacks: HabitStack[] = ["morning", "midday", "evening"];
-      const allDone = allStacks.every((st) => {
-        const stBinary = getResolvedHabitsByChainOrder(st).filter((h) => h.category === "binary" && h.is_active && !isDeferredAway(h.id));
-        if (stBinary.length === 0) return true;
-        return stBinary.every((h) => {
-          const entry = todayLog.entries[h.id];
-          return entry && (entry.status === "done" || entry.status === "missed" || entry.status === "later");
-        });
-      });
-      setAllStacksDone(allDone);
+      // Check if ALL stacks are done (uses shared service)
+      const allResolvedHabits = getResolvedHabits();
+      setAllStacksDone(areAllStacksAnswered(todayLog, allResolvedHabits));
     } else {
       setStackAlreadyDone(false);
     }
   }
 
-  const stacks: HabitStack[] = ["morning", "midday", "evening"];
+  const stacks = STACK_ORDER;
 
   // Get habits for current stack in chain order — uses resolved habits (respects settings + routine order)
   // Sprint rules:
@@ -268,9 +236,8 @@ export default function CheckinPage() {
   const canSubmit = allBinaryAnswered && allBadAnswered;
   const canSavePartial = anyAnswered && !canSubmit;
 
-  // Stack order for determining which stacks come "later"
-  const STACK_ORDER: HabitStack[] = ["morning", "midday", "evening"];
-  const laterStacks = STACK_ORDER.slice(STACK_ORDER.indexOf(activeStack) + 1);
+  // Stacks that come after the current one (for defer modal)
+  const laterStacks = getLaterStacks(activeStack);
 
   function setEntry(habitId: string, status: LogStatus) {
     // If "later" and there are stacks to defer to (and not in singleCheckin sprint mode), show defer modal
@@ -890,7 +857,7 @@ export default function CheckinPage() {
       <header className="mb-6">
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-xl font-bold">
-            {getGreeting()} {getGreetingEmoji()}
+            {getGreeting("Michael")} {getGreetingEmoji()}
           </h1>
           <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
             ✕

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState, getTodayLog, getLevelForXP, loadSettings, recalculateStreaks, saveState, loadAdminTasks } from "@/lib/store";
+import { loadState, getTodayLog, getLevelForXP, recalculateStreaks, saveState, loadAdminTasks } from "@/lib/store";
 import type { LocalState, AdminTask } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
@@ -9,6 +9,8 @@ import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
 import { startNotificationScheduler, getNotificationPermission, syncScheduleToServiceWorker, syncCompletionToServiceWorker } from "@/lib/notifications";
+import { getNextCheckinDisplay } from "@/lib/schedule";
+import { getDailyCompletionStats, getBadHabitStats, getWeekLogsFromArray, formatBadHabitDisplay } from "@/lib/completion";
 import NotificationBanner from "@/components/NotificationBanner";
 import LevelSuggestionBanner from "@/components/LevelSuggestionBanner";
 
@@ -47,25 +49,11 @@ export default function Home() {
 
   // Dynamic habit lists from resolved habits (respects user settings)
   const resolvedHabits = getResolvedHabits();
-  const bareMinHabits = resolvedHabits.filter((h) => h.is_bare_minimum && h.is_active);
-  const stretchHabits = resolvedHabits.filter((h) => h.category === "binary" && !h.is_bare_minimum && h.is_active);
-  const measuredHabits = resolvedHabits.filter((h) => h.category === "measured" && h.is_active);
   const badHabits = resolvedHabits.filter((h) => h.category === "bad" && h.is_active);
 
-  let bareMinDone = 0;
-  let stretchDone = 0;
-  let measuredDone = 0;
-  if (todayLog) {
-    for (const h of bareMinHabits) {
-      if (todayLog.entries[h.id]?.status === "done") bareMinDone++;
-    }
-    for (const h of stretchHabits) {
-      if (todayLog.entries[h.id]?.status === "done") stretchDone++;
-    }
-    for (const h of measuredHabits) {
-      if (todayLog.entries[h.id]?.value && todayLog.entries[h.id].value! > 0) measuredDone++;
-    }
-  }
+  // Completion stats from shared service — single source of truth
+  const completionStats = getDailyCompletionStats(todayLog, resolvedHabits);
+  const { bareMinDone, bareMinTotal, stretchDone, stretchTotal, measuredDone, measuredTotal } = completionStats;
 
   // Dynamic top streaks — bare minimum habits sorted by streak length
   const streaks = state?.streaks ?? {};
@@ -75,61 +63,12 @@ export default function Home() {
     .sort((a, b) => b.days - a.days)
     .slice(0, 4);
 
-  // Bad habits this week — dynamic from resolved habits
-  const now = new Date();
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - now.getDay());
-  const weekStartStr = weekStart.toISOString().slice(0, 10);
-  const weekLogs = state?.logs.filter((l) => l.date >= weekStartStr) ?? [];
+  // Bad habits this week — from shared service
+  const weekLogs = getWeekLogsFromArray(state?.logs ?? []);
+  const badWeekStats = getBadHabitStats(badHabits, weekLogs);
 
-  const badWeekStats = badHabits.map((h) => {
-    let count = 0;
-    let minutes = 0;
-    for (const log of weekLogs) {
-      const entry = log.badEntries[h.id];
-      if (entry?.occurred) {
-        count++;
-        minutes += entry.durationMinutes ?? 0;
-      }
-    }
-    return {
-      slug: h.slug,
-      icon: h.icon || "⚠️",
-      label: h.name,
-      unit: h.unit,
-      count,
-      minutes,
-    };
-  });
-
-  // Next check-in time — from user settings
-  const settings = loadSettings();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
-  const currentMinutes = hour * 60 + minute;
-
-  const checkinTimes = [
-    { label: "morning", time: settings.checkinTimes.morning },
-    { label: "midday", time: settings.checkinTimes.midday },
-    { label: "evening", time: settings.checkinTimes.evening },
-  ];
-
-  function formatTime(t: string): string {
-    const [h, m] = t.split(":").map(Number);
-    const ampm = h >= 12 ? "PM" : "AM";
-    const h12 = h % 12 || 12;
-    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
-  }
-
-  let nextCheckin = "7:00 AM tomorrow";
-  for (const ct of checkinTimes) {
-    const [h, m] = ct.time.split(":").map(Number);
-    const mins = h * 60 + m;
-    if (mins > currentMinutes) {
-      nextCheckin = formatTime(ct.time);
-      break;
-    }
-  }
+  // Next check-in time — from shared schedule service (single source of truth)
+  const nextCheckin = getNextCheckinDisplay();
 
   return (
     <div className="flex flex-col min-h-screen px-4 py-6">
@@ -189,9 +128,9 @@ export default function Home() {
 
       {/* Progress Rings */}
       <section className="flex justify-center gap-6 mb-8">
-        <ProgressRing label="Non-negotiables" done={bareMinDone} total={bareMinHabits.length} color="#22c55e" />
-        <ProgressRing label="Measured" done={measuredDone} total={measuredHabits.length} color="#3b82f6" />
-        <ProgressRing label="Stretch" done={stretchDone} total={stretchHabits.length} color="#eab308" />
+        <ProgressRing label="Non-negotiables" done={bareMinDone} total={bareMinTotal} color="#22c55e" />
+        <ProgressRing label="Measured" done={measuredDone} total={measuredTotal} color="#3b82f6" />
+        <ProgressRing label="Stretch" done={stretchDone} total={stretchTotal} color="#eab308" />
       </section>
 
       {/* Admin Tasks — always visible, links to /admin */}
@@ -287,18 +226,9 @@ export default function Home() {
             Bad Habits This Week
           </h2>
           <div className="space-y-2 text-sm">
-            {badWeekStats.map((bh) => {
-              let display: string;
-              if (bh.unit === "minutes") {
-                const hrs = bh.minutes / 60;
-                display = hrs >= 1 ? `${hrs.toFixed(1)}h` : `${bh.minutes}m`;
-              } else {
-                display = `${bh.count} days`;
-              }
-              return (
-                <BadHabitRow key={bh.slug} icon={bh.icon} label={bh.label} value={display} />
-              );
-            })}
+            {badWeekStats.map((bh) => (
+              <BadHabitRow key={bh.slug} icon={bh.icon} label={bh.label} value={formatBadHabitDisplay(bh.unit, bh.count, bh.minutes)} />
+            ))}
           </div>
         </section>
       )}

@@ -5,6 +5,7 @@
 import { getRandomQuote } from "./habits";
 import { loadState, saveState, getToday, loadSettings } from "./store";
 import { getResolvedHabits } from "./resolvedHabits";
+import { isStackComplete as sharedIsStackComplete, areAllStacksComplete, getCheckinSchedule, getCurrentTime, STACK_ORDER } from "./schedule";
 import type { HabitStack } from "@/types/database";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -102,15 +103,15 @@ export function saveNotifState(state: NotificationState): void {
 }
 
 function getDefaultNotifState(): NotificationState {
-  const settings = loadSettings();
+  const schedule = getCheckinSchedule();
   return {
     permissionGranted: false,
     escalations: [],
     lastCheckinDate: {} as Record<HabitStack, string>,
     scheduledCheckins: [
-      { stack: "morning", time: settings.checkinTimes.morning },
-      { stack: "midday", time: settings.checkinTimes.midday },
-      { stack: "evening", time: settings.checkinTimes.evening },
+      { stack: "morning", time: schedule.morning },
+      { stack: "midday", time: schedule.midday },
+      { stack: "evening", time: schedule.evening },
     ],
   };
 }
@@ -144,10 +145,10 @@ export async function syncScheduleToServiceWorker(): Promise<void> {
 
   const registration = await navigator.serviceWorker?.ready;
   if (registration?.active) {
-    const settings = loadSettings();
+    const schedule = getCheckinSchedule();
     registration.active.postMessage({
       type: "SET_SCHEDULE",
-      schedule: settings.checkinTimes,
+      schedule,
     });
   }
 }
@@ -166,23 +167,17 @@ export async function syncCompletionToServiceWorker(): Promise<void> {
     const habits = getResolvedHabits();
 
     const completedStacks: string[] = [];
-    for (const stack of ["morning", "midday", "evening"] as const) {
-      const stackBinary = habits.filter(
-        (h) => h.stack === stack && h.category === "binary" && h.is_active
-      );
-      if (stackBinary.length === 0) continue;
-      const allAnswered = stackBinary.every((h) => {
-        const entry = todayLog?.entries[h.id];
-        return entry && (entry.status === "done" || entry.status === "missed");
-      });
-      if (allAnswered) completedStacks.push(stack);
+    for (const stack of STACK_ORDER) {
+      if (sharedIsStackComplete(stack, todayLog, habits)) {
+        completedStacks.push(stack);
+      }
     }
 
     registration.active.postMessage({
       type: "SET_COMPLETION",
       date: today,
       completedStacks,
-      allDone: completedStacks.length === 3,
+      allDone: completedStacks.length === STACK_ORDER.length,
     });
   }
 }
@@ -224,28 +219,14 @@ export function stopNotificationScheduler(): void {
 }
 
 function tickScheduler(): void {
-  const now = new Date();
-  const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const currentTime = getCurrentTime();
   const today = getToday();
   const notifState = loadNotifState();
   const state = loadState();
   const todayLog = state.logs.find((l) => l.date === today);
   const habits = getResolvedHabits();
 
-  // Check if a stack is already fully logged
-  function isStackComplete(stack: HabitStack): boolean {
-    if (!todayLog) return false;
-    const stackBinary = habits.filter(
-      (h) => h.stack === stack && h.category === "binary" && h.is_active
-    );
-    if (stackBinary.length === 0) return false;
-    return stackBinary.every((h) => {
-      const entry = todayLog.entries[h.id];
-      return entry && (entry.status === "done" || entry.status === "missed");
-    });
-  }
-
-  const allStacksComplete = (["morning", "midday", "evening"] as const).every(isStackComplete);
+  const allStacksComplete = areAllStacksComplete(todayLog, habits);
 
   for (const checkin of notifState.scheduledCheckins) {
     // Only fire if time matches AND we haven't already fired for this stack today
@@ -266,7 +247,7 @@ function tickScheduler(): void {
       }
 
       // If this specific stack is complete, skip the notification
-      if (isStackComplete(checkin.stack)) {
+      if (sharedIsStackComplete(checkin.stack, todayLog, habits)) {
         notifState.lastCheckinDate[checkin.stack] = today;
         saveNotifState(notifState);
         continue;
