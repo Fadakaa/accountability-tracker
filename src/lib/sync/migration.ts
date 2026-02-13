@@ -27,6 +27,18 @@ import {
 
 const MIGRATED_KEY = "accountability-migrated";
 
+// ─── Progress callback for on-screen logging ────────────
+
+export interface MigrationStep {
+  step: string;
+  status: "running" | "done" | "error" | "skipped";
+  detail?: string;
+}
+
+export type MigrationProgressCallback = (steps: MigrationStep[]) => void;
+
+// ─── Helpers ────────────────────────────────────────────
+
 export function isMigrated(): boolean {
   if (typeof window === "undefined") return false;
   return localStorage.getItem(MIGRATED_KEY) === "true";
@@ -38,25 +50,22 @@ function markMigrated(): void {
   }
 }
 
-/** Check if Supabase already has habits for this user (i.e., they've been seeded before) */
+/** Check if Supabase already has habits for this user */
 async function hasExistingData(userId: string): Promise<boolean> {
-  const { count } = await sb
+  const { count, error } = await sb
     .from("habits")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId);
+  if (error) throw new Error(`hasExistingData: ${error.message}`);
   return (count ?? 0) > 0;
 }
 
 /**
  * Seed default habits for a new user.
- * Generates fresh UUIDs for each habit (avoids conflicts with any
- * pre-existing seed data from the SQL scripts).
- * Returns a mapping of old → new IDs so callers can remap references.
+ * Generates fresh UUIDs for each habit.
+ * Returns a mapping of old → new IDs.
  */
 async function seedHabitsForUser(userId: string): Promise<Record<string, string>> {
-  console.log("[migration] Seeding habits for user", userId);
-
-  // Always generate fresh UUIDs — avoids conflicts with seed data
   const idMap: Record<string, string> = {};
   const habitRows = HABITS.map((h) => {
     const newId = crypto.randomUUID();
@@ -79,8 +88,7 @@ async function seedHabitsForUser(userId: string): Promise<Record<string, string>
 
   const { error: habitsError } = await sb.from("habits").insert(habitRows);
   if (habitsError) {
-    console.error("[migration] Failed to seed habits:", habitsError);
-    throw habitsError;
+    throw new Error(`Seed habits: ${habitsError.message} (code: ${habitsError.code}, details: ${habitsError.details})`);
   }
 
   // Insert habit levels with remapped IDs
@@ -96,94 +104,128 @@ async function seedHabitsForUser(userId: string): Promise<Record<string, string>
       onConflict: "habit_id,level",
     });
     if (levelsError) {
-      console.warn("[migration] Failed to seed habit levels:", levelsError);
+      // Non-fatal — habits were created, just levels failed
+      console.warn("[migration] Habit levels warning:", levelsError);
     }
   }
 
-  // Store mapping so we can remap daily_log habit references
+  // Store mapping for ID remapping
   if (typeof window !== "undefined") {
     localStorage.setItem("accountability-habit-id-map", JSON.stringify(idMap));
   }
 
-  console.log("[migration] Seeded", habitRows.length, "habits and", allLevelRows.length, "levels");
   return idMap;
 }
 
 /**
  * Migrate all localStorage data to Supabase.
- * Call once on first authenticated load.
+ * Accepts an optional progress callback for on-screen logging.
  */
-export async function migrateLocalStorageToSupabase(userId: string): Promise<void> {
+export async function migrateLocalStorageToSupabase(
+  userId: string,
+  onProgress?: MigrationProgressCallback,
+): Promise<void> {
   if (isMigrated()) {
-    console.log("[migration] Already migrated, skipping");
+    onProgress?.([{ step: "Migration", status: "skipped", detail: "Already migrated" }]);
     return;
   }
 
-  console.log("[migration] Starting data migration to Supabase...");
+  const steps: MigrationStep[] = [];
+  function report(step: string, status: MigrationStep["status"], detail?: string) {
+    const existing = steps.find((s) => s.step === step);
+    if (existing) {
+      existing.status = status;
+      existing.detail = detail;
+    } else {
+      steps.push({ step, status, detail });
+    }
+    onProgress?.([...steps]);
+  }
 
   try {
-    // 0. Ensure user_profile exists (all tables have FK to it)
-    // The trigger creates it on signup, but if user signed up before
-    // the SQL was run, they won't have one.
+    // ── Step 0: Verify auth session ─────────────────────
+    report("Check auth session", "running");
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) {
+      report("Check auth session", "error", `Auth error: ${sessionError.message}`);
+      throw new Error(`Auth session check failed: ${sessionError.message}`);
+    }
+    if (!session) {
+      report("Check auth session", "error", "No active session — are you signed in?");
+      throw new Error("No active auth session. Please sign in first.");
+    }
+    report("Check auth session", "done", `Signed in as ${session.user.email}`);
+
+    // ── Step 1: Ensure user_profile exists ──────────────
+    report("Create user profile", "running");
     const { error: profileError } = await sb.from("user_profile").upsert(
       { id: userId, timezone: "Europe/London" },
-      { onConflict: "id" }
+      { onConflict: "id" },
     );
     if (profileError) {
-      console.warn("[migration] Profile upsert warning:", profileError);
+      report("Create user profile", "error", `${profileError.message} (code: ${profileError.code})`);
+      throw new Error(`user_profile upsert failed: ${profileError.message} (code: ${profileError.code})`);
     }
+    report("Create user profile", "done");
 
-    // 1. Seed habits if this user has none
+    // ── Step 2: Seed habits ─────────────────────────────
+    report("Seed habits", "running");
     let idMap: Record<string, string> = {};
     const hasData = await hasExistingData(userId);
     if (!hasData) {
       idMap = await seedHabitsForUser(userId);
+      report("Seed habits", "done", `${HABITS.length} habits created`);
     } else {
-      // Load existing ID mapping if we seeded before
+      // Load existing ID mapping
       const stored = typeof window !== "undefined"
         ? localStorage.getItem("accountability-habit-id-map")
         : null;
       if (stored) {
         idMap = JSON.parse(stored);
+        report("Seed habits", "done", `Already seeded — loaded ${Object.keys(idMap).length} ID mappings`);
       } else {
-        // ID map was lost (e.g., after logout/login cycle).
-        // Rebuild it by matching Supabase habits (new IDs) to HABITS (old IDs) by slug.
-        console.log("[migration] Rebuilding habit ID map from Supabase...");
-        const { data: dbHabits } = await sb
+        // Rebuild from Supabase by matching slugs
+        const { data: dbHabits, error: habitsErr } = await sb
           .from("habits")
           .select("id,slug")
           .eq("user_id", userId);
+        if (habitsErr) {
+          report("Seed habits", "error", `Fetch habits failed: ${habitsErr.message}`);
+          throw new Error(`Fetch habits: ${habitsErr.message}`);
+        }
         if (dbHabits && dbHabits.length > 0) {
           const slugToNewId: Record<string, string> = {};
-          for (const h of dbHabits) {
-            slugToNewId[h.slug] = h.id;
-          }
+          for (const h of dbHabits) slugToNewId[h.slug] = h.id;
           for (const h of HABITS) {
-            if (slugToNewId[h.slug]) {
-              idMap[h.id] = slugToNewId[h.slug];
-            }
+            if (slugToNewId[h.slug]) idMap[h.id] = slugToNewId[h.slug];
           }
-          // Re-save the map so we don't have to rebuild next time
           if (typeof window !== "undefined") {
             localStorage.setItem("accountability-habit-id-map", JSON.stringify(idMap));
           }
-          console.log("[migration] Rebuilt ID map for", Object.keys(idMap).length, "habits");
         }
+        report("Seed habits", "done", `Rebuilt ID map for ${Object.keys(idMap).length} habits`);
       }
     }
     const remapId = (oldId: string) => idMap[oldId] ?? oldId;
 
-    // 2. Migrate settings
+    // ── Step 3: Upload settings ─────────────────────────
+    report("Upload settings", "running");
     const settings = loadSettings();
     const { error: settingsError } = await sb.from("user_settings").upsert({
       user_id: userId,
       settings_json: settings,
       updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" });
-    if (settingsError) console.warn("[migration] Settings error:", settingsError);
+    if (settingsError) {
+      report("Upload settings", "error", settingsError.message);
+      // Non-fatal
+    } else {
+      report("Upload settings", "done");
+    }
 
-    // 3. Migrate custom habits (merge into habits table)
+    // ── Step 4: Custom habits ───────────────────────────
     if (settings.customHabits && settings.customHabits.length > 0) {
+      report("Upload custom habits", "running");
       const customRows = settings.customHabits.map((h) => ({
         id: remapId(h.id),
         user_id: userId,
@@ -199,11 +241,17 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
         current_level: h.current_level,
       }));
       const { error } = await sb.from("habits").upsert(customRows, { onConflict: "id" });
-      if (error) console.warn("[migration] Custom habits error:", error);
+      if (error) {
+        report("Upload custom habits", "error", error.message);
+      } else {
+        report("Upload custom habits", "done", `${customRows.length} habits`);
+      }
     }
 
-    // 4. Apply habit overrides to the habits table
-    if (settings.habitOverrides) {
+    // ── Step 5: Apply habit overrides ───────────────────
+    if (settings.habitOverrides && Object.keys(settings.habitOverrides).length > 0) {
+      report("Apply habit overrides", "running");
+      let overrideCount = 0;
       for (const [habitId, override] of Object.entries(settings.habitOverrides)) {
         const updates: Record<string, unknown> = {};
         if (override.stack !== undefined) updates.stack = override.stack;
@@ -214,171 +262,241 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
 
         if (Object.keys(updates).length > 0) {
           await sb.from("habits").update(updates).eq("id", remapId(habitId)).eq("user_id", userId);
+          overrideCount++;
         }
       }
+      report("Apply habit overrides", "done", `${overrideCount} overrides applied`);
     }
 
-    // Each section is wrapped in try/catch so one failure doesn't block the rest.
-    // This ensures admin tasks, gym sessions etc. still upload even if daily logs fail.
-    const errors: string[] = [];
+    // ── Each remaining section wrapped in try/catch ─────
+    const sectionErrors: string[] = [];
 
-    // 5. Migrate daily logs
+    // ── Step 6: Daily logs + XP + Streaks + Sprints ─────
     try {
+      report("Upload daily logs", "running");
       const state = loadState();
       if (state.logs.length > 0) {
-        console.log("[migration] Migrating", state.logs.length, "day logs...");
         for (let i = 0; i < state.logs.length; i += 10) {
           const batch = state.logs.slice(i, i + 10);
           for (const dayLog of batch) {
             const remappedLog = {
               ...dayLog,
               entries: Object.fromEntries(
-                Object.entries(dayLog.entries).map(([hid, v]) => [remapId(hid), v])
+                Object.entries(dayLog.entries).map(([hid, v]) => [remapId(hid), v]),
               ),
               badEntries: Object.fromEntries(
-                Object.entries(dayLog.badEntries).map(([hid, v]) => [remapId(hid), v])
+                Object.entries(dayLog.badEntries).map(([hid, v]) => [remapId(hid), v]),
               ),
             };
             const { dailyLogs, badHabitLogs, summary } = dayLogToRows(remappedLog, userId);
             if (dailyLogs.length > 0) {
-              await sb.from("daily_logs").upsert(
+              const { error } = await sb.from("daily_logs").upsert(
                 dailyLogs.map((r) => ({ ...r, id: crypto.randomUUID() })),
-                { onConflict: "habit_id,log_date" }
+                { onConflict: "habit_id,log_date" },
               );
+              if (error) throw new Error(`daily_logs: ${error.message}`);
             }
             if (badHabitLogs.length > 0) {
-              await sb.from("bad_habit_logs").upsert(
+              const { error } = await sb.from("bad_habit_logs").upsert(
                 badHabitLogs.map((r) => ({ ...r, id: crypto.randomUUID() })),
-                { onConflict: "habit_id,log_date" }
+                { onConflict: "habit_id,log_date" },
               );
+              if (error) throw new Error(`bad_habit_logs: ${error.message}`);
             }
-            await sb.from("daily_log_summaries").upsert(
+            const { error: sumError } = await sb.from("daily_log_summaries").upsert(
               { ...summary, id: crypto.randomUUID() },
-              { onConflict: "user_id,log_date" }
+              { onConflict: "user_id,log_date" },
             );
+            if (sumError) throw new Error(`daily_log_summaries: ${sumError.message}`);
           }
         }
+        report("Upload daily logs", "done", `${state.logs.length} days`);
+      } else {
+        report("Upload daily logs", "skipped", "No logs in localStorage");
       }
 
-      // 6. XP
-      await sb.from("user_xp").upsert({
-        user_id: userId, total_xp: state.totalXp, current_level: state.currentLevel,
+      // XP
+      report("Upload XP & streaks", "running");
+      const { error: xpError } = await sb.from("user_xp").upsert({
+        user_id: userId,
+        total_xp: state.totalXp,
+        current_level: state.currentLevel,
       }, { onConflict: "user_id" });
+      if (xpError) throw new Error(`user_xp: ${xpError.message}`);
 
-      // 7. Streaks
+      // Streaks
       for (const [slug, count] of Object.entries(state.streaks)) {
         const habit = HABITS.find((h) => h.slug === slug) ??
           settings.customHabits?.find((h) => h.slug === slug);
         if (!habit) continue;
-        await sb.from("streaks").upsert({
-          user_id: userId, habit_id: remapId(habit.id),
-          current_count: count, longest_count: count,
+        const { error } = await sb.from("streaks").upsert({
+          user_id: userId,
+          habit_id: remapId(habit.id),
+          current_count: count,
+          longest_count: count,
         }, { onConflict: "user_id,habit_id" });
+        if (error) throw new Error(`streaks: ${error.message}`);
       }
 
-      // 8. Bare minimum streak
-      await sb.from("bare_minimum_streak").upsert({
+      // Bare minimum streak
+      const { error: bmError } = await sb.from("bare_minimum_streak").upsert({
         user_id: userId,
         current_count: state.bareMinimumStreak,
         longest_count: state.bareMinimumStreak,
       }, { onConflict: "user_id" });
+      if (bmError) throw new Error(`bare_minimum_streak: ${bmError.message}`);
 
-      // 9. Sprints
-      if (state.activeSprint) {
-        const { sprint, tasks } = sprintToRows(state.activeSprint, userId);
-        await sb.from("sprints").upsert(sprint, { onConflict: "id" });
-        if (tasks.length > 0) await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
-      }
-      for (const s of state.sprintHistory ?? []) {
-        const { sprint, tasks } = sprintToRows(s, userId);
-        await sb.from("sprints").upsert(sprint, { onConflict: "id" });
-        if (tasks.length > 0) await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
+      report("Upload XP & streaks", "done");
+
+      // Sprints
+      if (state.activeSprint || (state.sprintHistory && state.sprintHistory.length > 0)) {
+        report("Upload sprints", "running");
+        if (state.activeSprint) {
+          const { sprint, tasks } = sprintToRows(state.activeSprint, userId);
+          const { error } = await sb.from("sprints").upsert(sprint, { onConflict: "id" });
+          if (error) throw new Error(`sprints: ${error.message}`);
+          if (tasks.length > 0) {
+            const { error: tErr } = await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
+            if (tErr) throw new Error(`sprint_tasks: ${tErr.message}`);
+          }
+        }
+        for (const s of state.sprintHistory ?? []) {
+          const { sprint, tasks } = sprintToRows(s, userId);
+          const { error } = await sb.from("sprints").upsert(sprint, { onConflict: "id" });
+          if (error) throw new Error(`sprints (history): ${error.message}`);
+          if (tasks.length > 0) {
+            const { error: tErr } = await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
+            if (tErr) throw new Error(`sprint_tasks (history): ${tErr.message}`);
+          }
+        }
+        report("Upload sprints", "done");
       }
 
-      // 10. Reflections
+      // Reflections
       if (state.reflections && state.reflections.length > 0) {
+        report("Upload reflections", "running");
         const rows = state.reflections.map((r) => reflectionToRow(r, userId));
-        await sb.from("wrap_reflections").upsert(rows, { onConflict: "id" });
+        const { error } = await sb.from("wrap_reflections").upsert(rows, { onConflict: "id" });
+        if (error) throw new Error(`reflections: ${error.message}`);
+        report("Upload reflections", "done", `${rows.length} reflections`);
       }
     } catch (err) {
-      console.warn("[migration] Daily logs/state section failed:", err);
-      errors.push("daily logs");
+      const msg = err instanceof Error ? err.message : String(err);
+      report("Upload daily logs", "error", msg);
+      sectionErrors.push(`daily logs: ${msg}`);
     }
 
-    // 11. Migrate gym sessions
+    // ── Step 7: Gym sessions ────────────────────────────
     try {
+      report("Upload gym sessions", "running");
       const gymSessions = loadGymSessions();
       if (gymSessions.length > 0) {
-        console.log("[migration] Migrating", gymSessions.length, "gym sessions...");
         for (const session of gymSessions) {
           const { session: sessionRow, exercises } = gymSessionToRows(session, userId);
-          await sb.from("gym_sessions").upsert(sessionRow, { onConflict: "id" });
+          const { error: sErr } = await sb.from("gym_sessions").upsert(sessionRow, { onConflict: "id" });
+          if (sErr) throw new Error(`gym_sessions: ${sErr.message} (${JSON.stringify(sessionRow).slice(0, 100)})`);
           for (const ex of exercises) {
             const { sets, ...exRow } = ex;
-            await sb.from("gym_exercises").upsert(exRow, { onConflict: "id" });
+            const { error: eErr } = await sb.from("gym_exercises").upsert(exRow, { onConflict: "id" });
+            if (eErr) throw new Error(`gym_exercises: ${eErr.message}`);
             if (sets.length > 0) {
-              await sb.from("gym_sets").upsert(sets, { onConflict: "id" });
+              const { error: setErr } = await sb.from("gym_sets").upsert(sets, { onConflict: "id" });
+              if (setErr) throw new Error(`gym_sets: ${setErr.message}`);
             }
           }
         }
+        report("Upload gym sessions", "done", `${gymSessions.length} sessions`);
+      } else {
+        report("Upload gym sessions", "skipped", "No gym sessions");
       }
     } catch (err) {
-      console.warn("[migration] Gym sessions failed:", err);
-      errors.push("gym sessions");
+      const msg = err instanceof Error ? err.message : String(err);
+      report("Upload gym sessions", "error", msg);
+      sectionErrors.push(`gym: ${msg}`);
     }
 
-    // 12. Migrate gym routines
+    // ── Step 8: Gym routines ────────────────────────────
     try {
+      report("Upload gym routines", "running");
       const gymRoutines = loadGymRoutines();
       if (gymRoutines.length > 0) {
         for (const routine of gymRoutines) {
           const { routine: routineRow, exercises } = gymRoutineToRows(routine, userId);
-          await sb.from("gym_routines").upsert(routineRow, { onConflict: "id" });
+          const { error: rErr } = await sb.from("gym_routines").upsert(routineRow, { onConflict: "id" });
+          if (rErr) throw new Error(`gym_routines: ${rErr.message}`);
           if (exercises.length > 0) {
-            await sb.from("gym_routine_exercises").insert(exercises);
+            // Use upsert with individual inserts to avoid duplicate errors on re-run
+            for (const ex of exercises) {
+              const { error: exErr } = await sb.from("gym_routine_exercises").upsert(ex, { onConflict: "id" });
+              if (exErr) throw new Error(`gym_routine_exercises: ${exErr.message}`);
+            }
           }
         }
+        report("Upload gym routines", "done", `${gymRoutines.length} routines`);
+      } else {
+        report("Upload gym routines", "skipped", "No routines");
       }
     } catch (err) {
-      console.warn("[migration] Gym routines failed:", err);
-      errors.push("gym routines");
+      const msg = err instanceof Error ? err.message : String(err);
+      report("Upload gym routines", "error", msg);
+      sectionErrors.push(`gym routines: ${msg}`);
     }
 
-    // 13. Migrate admin tasks
+    // ── Step 9: Admin tasks ─────────────────────────────
     try {
+      report("Upload admin tasks", "running");
       const adminTasks = loadAllAdminTasks();
       if (adminTasks.length > 0) {
-        console.log("[migration] Migrating", adminTasks.length, "admin tasks...");
         const rows = adminTasks.map((t) => adminTaskToRow(t, userId));
-        await sb.from("admin_tasks").upsert(rows, { onConflict: "id" });
+        const { error } = await sb.from("admin_tasks").upsert(rows, { onConflict: "id" });
+        if (error) throw new Error(`admin_tasks: ${error.message} (code: ${error.code})`);
+        report("Upload admin tasks", "done", `${adminTasks.length} tasks`);
+      } else {
+        report("Upload admin tasks", "skipped", "No admin tasks");
       }
     } catch (err) {
-      console.warn("[migration] Admin tasks failed:", err);
-      errors.push("admin tasks");
+      const msg = err instanceof Error ? err.message : String(err);
+      report("Upload admin tasks", "error", msg);
+      sectionErrors.push(`admin: ${msg}`);
     }
 
-    // 14. Migrate showing up data
+    // ── Step 10: Showing up data ────────────────────────
     try {
+      report("Upload app usage", "running");
       const showingUp = loadShowingUpData();
       if (showingUp.totalOpens > 0) {
-        await sb.from("app_usage_stats").upsert({
+        const { error } = await sb.from("app_usage_stats").upsert({
           ...showingUpToRow(showingUp, userId),
         }, { onConflict: "user_id" });
+        if (error) throw new Error(`app_usage_stats: ${error.message}`);
+        report("Upload app usage", "done", `${showingUp.totalOpens} opens, ${showingUp.uniqueDays} days`);
+      } else {
+        report("Upload app usage", "skipped", "No usage data");
       }
     } catch (err) {
-      console.warn("[migration] Showing up data failed:", err);
-      errors.push("showing up");
+      const msg = err instanceof Error ? err.message : String(err);
+      report("Upload app usage", "error", msg);
+      sectionErrors.push(`app usage: ${msg}`);
     }
 
-    // Mark as migrated
+    // ── Done ────────────────────────────────────────────
     markMigrated();
-    if (errors.length > 0) {
-      console.warn("[migration] Completed with errors in:", errors.join(", "));
+    if (sectionErrors.length > 0) {
+      report("Summary", "error", `Partial success. Errors in: ${sectionErrors.join("; ")}`);
+    } else {
+      report("Summary", "done", "All data uploaded successfully!");
     }
-    console.log("[migration] Data migration complete!");
   } catch (err) {
-    console.error("[migration] Migration failed:", err);
+    const msg = err instanceof Error ? err.message : String(err);
     // Don't mark as migrated — will retry next time
-    throw err;
+    // Find which step is still "running" and mark it as error
+    const running = steps.find((s) => s.status === "running");
+    if (running) {
+      running.status = "error";
+      running.detail = msg;
+    }
+    steps.push({ step: "FATAL", status: "error", detail: msg });
+    onProgress?.([...steps]);
+    throw new Error(msg);
   }
 }

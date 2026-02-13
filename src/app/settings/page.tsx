@@ -16,6 +16,7 @@ import { createHabit, updateCustomHabit, deleteCustomHabit, isDefaultHabit, type
 import { useDB } from "@/hooks/useDB";
 import { saveSettingsToDB, saveStateToDB, loadStateFromDB, loadSettingsFromDB, loadHabitsFromDB } from "@/lib/db";
 import { migrateLocalStorageToSupabase, isMigrated } from "@/lib/sync/migration";
+import type { MigrationStep } from "@/lib/sync/migration";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -284,6 +285,7 @@ function DataSyncSection() {
   const [status, setStatus] = useState<"idle" | "uploading" | "downloading" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
   const [migrated, setMigrated] = useState(false);
+  const [migrationSteps, setMigrationSteps] = useState<MigrationStep[]>([]);
 
   // Check migration status on mount (must be in useEffect to avoid SSR issues)
   useEffect(() => {
@@ -295,16 +297,19 @@ function DataSyncSection() {
 
     setStatus("uploading");
     setMessage("");
+    setMigrationSteps([]);
     try {
       // Clear migration flag so it re-runs
       if (typeof window !== "undefined") {
         localStorage.removeItem("accountability-migrated");
+        localStorage.removeItem("accountability-habit-id-map");
       }
-      await migrateLocalStorageToSupabase(user.id);
+      await migrateLocalStorageToSupabase(user.id, (steps) => {
+        setMigrationSteps([...steps]);
+      });
       setStatus("success");
       setMigrated(true);
       setMessage("Data uploaded to the cloud!");
-      setTimeout(() => setStatus("idle"), 4000);
     } catch (err: unknown) {
       console.error("[sync] Upload failed:", err);
       setStatus("error");
@@ -317,6 +322,7 @@ function DataSyncSection() {
     if (!user) { setMessage("Sign in first"); return; }
     setStatus("downloading");
     setMessage("");
+    setMigrationSteps([]);
     try {
       // Pull fresh state from Supabase and overwrite localStorage
       const [cloudState, cloudSettings] = await Promise.all([
@@ -340,9 +346,19 @@ function DataSyncSection() {
     } catch (err) {
       console.error("[sync] Download failed:", err);
       setStatus("error");
-      setMessage("Download failed — check console for details");
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessage(`Download failed: ${msg}`);
     }
   }
+
+  const statusIcon = (s: MigrationStep["status"]) => {
+    switch (s) {
+      case "running": return "⏳";
+      case "done": return "✅";
+      case "error": return "❌";
+      case "skipped": return "⏭️";
+    }
+  };
 
   return (
     <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
@@ -398,6 +414,33 @@ function DataSyncSection() {
           Pulls the latest data from the cloud to this browser (overwrites local data)
         </p>
       </div>
+
+      {/* Step-by-step migration progress */}
+      {migrationSteps.length > 0 && (
+        <div className="mt-3 rounded-lg bg-surface-900 border border-surface-700 p-3 space-y-1.5 max-h-64 overflow-y-auto">
+          <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider mb-1">Migration Log</p>
+          {migrationSteps.map((s, i) => (
+            <div key={i} className="flex items-start gap-2 text-[11px]">
+              <span className="shrink-0">{statusIcon(s.status)}</span>
+              <div className="min-w-0">
+                <span className={
+                  s.status === "error" ? "text-missed font-medium" :
+                  s.status === "done" ? "text-done" :
+                  s.status === "running" ? "text-neutral-300" :
+                  "text-neutral-500"
+                }>
+                  {s.step}
+                </span>
+                {s.detail && (
+                  <span className={`ml-1 ${s.status === "error" ? "text-missed/70" : "text-neutral-600"}`}>
+                    — {s.detail}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Status message */}
       {message && (
