@@ -107,6 +107,7 @@ export async function loadStateFromDB(): Promise<LocalState> {
       sprintsRes,
       sprintTasksRes,
       reflectionsRes,
+      habitsRes,
     ] = await Promise.all([
       sb.from("daily_logs").select("*").eq("user_id", userId).order("log_date", { ascending: false }),
       sb.from("bad_habit_logs").select("*").eq("user_id", userId),
@@ -117,6 +118,7 @@ export async function loadStateFromDB(): Promise<LocalState> {
       sb.from("sprints").select("*").eq("user_id", userId),
       sb.from("sprint_tasks").select("*"),
       sb.from("wrap_reflections").select("*").eq("user_id", userId),
+      sb.from("habits").select("id,slug").eq("user_id", userId),
     ]);
 
     const dailyLogs = dailyLogsRes.data ?? [];
@@ -128,6 +130,13 @@ export async function loadStateFromDB(): Promise<LocalState> {
     const sprints = sprintsRes.data ?? [];
     const sprintTasks = sprintTasksRes.data ?? [];
     const reflectionsRaw = reflectionsRes.data ?? [];
+    const habitsForSlug = (habitsRes.data ?? []) as { id: string; slug: string }[];
+
+    // Build habit ID → slug mapping for streak keys
+    const habitIdToSlug: Record<string, string> = {};
+    for (const h of habitsForSlug) {
+      habitIdToSlug[h.id] = h.slug;
+    }
 
     // Find the most recent reflection date for lastWrapDate
     const sortedReflections = (reflectionsRaw as SupabaseFetchResult["reflections"]).sort((a, b) =>
@@ -146,7 +155,7 @@ export async function loadStateFromDB(): Promise<LocalState> {
       sprintTasks: sprintTasks as SupabaseFetchResult["sprintTasks"],
       reflections: sortedReflections,
       lastWrapDate,
-    });
+    }, habitIdToSlug);
 
     // Cache in localStorage for offline fallback
     saveState(state);

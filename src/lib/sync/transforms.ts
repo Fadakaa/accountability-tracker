@@ -344,15 +344,18 @@ export function rowToShowingUp(row: {
 
 // ─── Full LocalState reconstruction from Supabase ───────
 
-export function supabaseToLocalState(data: SupabaseFetchResult): LocalState {
+export function supabaseToLocalState(
+  data: SupabaseFetchResult,
+  habitIdToSlug?: Record<string, string>,
+): LocalState {
   // Reconstruct logs
   const logs = rowsToDayLogs(data.dailyLogs, data.badHabitLogs, data.logSummaries);
 
-  // Reconstruct streaks: habit_id -> slug mapping will be handled by the caller
-  // For now, store as habit_id -> count (caller converts to slug -> count)
+  // Reconstruct streaks: convert habit_id → slug key (app expects slug keys)
   const streaks: Record<string, number> = {};
   for (const s of data.streaks) {
-    streaks[s.habit_id] = s.current_count;
+    const key = habitIdToSlug?.[s.habit_id] ?? s.habit_id;
+    streaks[key] = s.current_count;
   }
 
   // Reconstruct sprints

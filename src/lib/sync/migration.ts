@@ -49,47 +49,43 @@ async function hasExistingData(userId: string): Promise<boolean> {
 
 /**
  * Seed default habits for a new user.
- * Copies the 23 static habits from HABITS array into the habits table
- * with the user's real auth.uid() instead of the hardcoded UUID.
+ * Generates fresh UUIDs for each habit (avoids conflicts with any
+ * pre-existing seed data from the SQL scripts).
+ * Returns a mapping of old → new IDs so callers can remap references.
  */
-async function seedHabitsForUser(userId: string): Promise<void> {
+async function seedHabitsForUser(userId: string): Promise<Record<string, string>> {
   console.log("[migration] Seeding habits for user", userId);
 
-  // Insert habits with real user_id
-  const habitRows = HABITS.map((h) => ({
-    id: h.id,              // Keep same IDs so log references still work
-    user_id: userId,
-    name: h.name,
-    slug: h.slug,
-    category: h.category,
-    stack: h.stack,
-    is_bare_minimum: h.is_bare_minimum,
-    unit: h.unit,
-    icon: h.icon,
-    sort_order: h.sort_order,
-    is_active: h.is_active,
-    current_level: h.current_level,
-  }));
+  // Always generate fresh UUIDs — avoids conflicts with seed data
+  const idMap: Record<string, string> = {};
+  const habitRows = HABITS.map((h) => {
+    const newId = crypto.randomUUID();
+    idMap[h.id] = newId;
+    return {
+      id: newId,
+      user_id: userId,
+      name: h.name,
+      slug: h.slug,
+      category: h.category,
+      stack: h.stack,
+      is_bare_minimum: h.is_bare_minimum,
+      unit: h.unit,
+      icon: h.icon,
+      sort_order: h.sort_order,
+      is_active: h.is_active,
+      current_level: h.current_level,
+    };
+  });
 
-  const { error: habitsError } = await sb.from("habits").upsert(habitRows, { onConflict: "id" });
+  const { error: habitsError } = await sb.from("habits").insert(habitRows);
   if (habitsError) {
     console.error("[migration] Failed to seed habits:", habitsError);
     throw habitsError;
   }
 
-  // Insert habit levels
-  const levelRows = HABIT_LEVELS
-    .filter((l) => l.id !== "") // Skip if no ID (we'll let Supabase generate)
-    .map((l) => ({
-      habit_id: l.habit_id,
-      level: l.level,
-      label: l.label,
-      description: l.description,
-    }));
-
-  // Also include levels without IDs (most of them)
+  // Insert habit levels with remapped IDs
   const allLevelRows = HABIT_LEVELS.map((l) => ({
-    habit_id: l.habit_id,
+    habit_id: idMap[l.habit_id] ?? l.habit_id,
     level: l.level,
     label: l.label,
     description: l.description,
@@ -101,11 +97,16 @@ async function seedHabitsForUser(userId: string): Promise<void> {
     });
     if (levelsError) {
       console.warn("[migration] Failed to seed habit levels:", levelsError);
-      // Non-fatal — levels are nice to have but not critical
     }
   }
 
+  // Store mapping so we can remap daily_log habit references
+  if (typeof window !== "undefined") {
+    localStorage.setItem("accountability-habit-id-map", JSON.stringify(idMap));
+  }
+
   console.log("[migration] Seeded", habitRows.length, "habits and", allLevelRows.length, "levels");
+  return idMap;
 }
 
 /**
@@ -122,10 +123,18 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
 
   try {
     // 1. Seed habits if this user has none
+    let idMap: Record<string, string> = {};
     const hasData = await hasExistingData(userId);
     if (!hasData) {
-      await seedHabitsForUser(userId);
+      idMap = await seedHabitsForUser(userId);
+    } else {
+      // Load existing ID mapping if we seeded before
+      const stored = typeof window !== "undefined"
+        ? localStorage.getItem("accountability-habit-id-map")
+        : null;
+      if (stored) idMap = JSON.parse(stored);
     }
+    const remapId = (oldId: string) => idMap[oldId] ?? oldId;
 
     // 2. Migrate settings
     const settings = loadSettings();
@@ -139,7 +148,7 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
     // 3. Migrate custom habits (merge into habits table)
     if (settings.customHabits && settings.customHabits.length > 0) {
       const customRows = settings.customHabits.map((h) => ({
-        id: h.id,
+        id: remapId(h.id),
         user_id: userId,
         name: h.name,
         slug: h.slug,
@@ -167,7 +176,7 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
         if (override.sort_order !== undefined) updates.sort_order = override.sort_order;
 
         if (Object.keys(updates).length > 0) {
-          await sb.from("habits").update(updates).eq("id", habitId).eq("user_id", userId);
+          await sb.from("habits").update(updates).eq("id", remapId(habitId)).eq("user_id", userId);
         }
       }
     }
@@ -182,7 +191,17 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
         const batch = state.logs.slice(i, i + 10);
 
         for (const dayLog of batch) {
-          const { dailyLogs, badHabitLogs, summary } = dayLogToRows(dayLog, userId);
+          // Remap habit IDs in the dayLog before transforming
+          const remappedLog = {
+            ...dayLog,
+            entries: Object.fromEntries(
+              Object.entries(dayLog.entries).map(([hid, v]) => [remapId(hid), v])
+            ),
+            badEntries: Object.fromEntries(
+              Object.entries(dayLog.badEntries).map(([hid, v]) => [remapId(hid), v])
+            ),
+          };
+          const { dailyLogs, badHabitLogs, summary } = dayLogToRows(remappedLog, userId);
 
           if (dailyLogs.length > 0) {
             await sb.from("daily_logs").upsert(
@@ -222,7 +241,7 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
 
       await sb.from("streaks").upsert({
         user_id: userId,
-        habit_id: habit.id,
+        habit_id: remapId(habit.id),
         current_count: count,
         longest_count: count, // Use current as longest (we don't track longest locally)
       }, { onConflict: "user_id,habit_id" });
