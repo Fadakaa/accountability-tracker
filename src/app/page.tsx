@@ -18,6 +18,7 @@ export default function Home() {
   const [state, setState] = useState<LocalState | null>(null);
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
+  const [nextCheckin, setNextCheckin] = useState<string>("");
 
   useEffect(() => {
     // Load state and recalculate streaks from log history (source of truth)
@@ -32,6 +33,7 @@ export default function Home() {
     setState(loaded);
     setWeakHabits(getWeakHabits());
     setAdminTasks(loadAdminTasks());
+    setNextCheckin(getNextCheckinDisplay());
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();
       syncScheduleToServiceWorker();
@@ -67,8 +69,7 @@ export default function Home() {
   const weekLogs = getWeekLogsFromArray(state?.logs ?? []);
   const badWeekStats = getBadHabitStats(badHabits, weekLogs);
 
-  // Next check-in time — from shared schedule service (single source of truth)
-  const nextCheckin = getNextCheckinDisplay();
+  // nextCheckin is set inside useEffect (client-side only, reads from localStorage)
 
   return (
     <div className="flex flex-col min-h-screen px-4 py-6">
