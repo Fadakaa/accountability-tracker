@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { loadState, saveState, getToday, saveGymSession, loadGymSessions } from "@/lib/store";
-import type { GymSessionLocal, GymExerciseLocal, GymSetLocal } from "@/lib/store";
+import type { GymSessionLocal, GymExerciseLocal, GymSetLocal, GymRoutine, GymRoutineExercise } from "@/lib/store";
+import { loadGymRoutines, createGymRoutine, updateGymRoutine, deleteGymRoutine } from "@/lib/store";
 import type { TrainingType } from "@/types/database";
 import { XP_VALUES } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -20,7 +21,7 @@ const COMMON_EXERCISES: Record<string, string[]> = {
   "Full Body": ["Clean & Press", "Thruster", "Burpees", "Turkish Get Up"],
 };
 
-type Phase = "setup" | "logging" | "complete" | "archive";
+type Phase = "setup" | "logging" | "complete" | "archive" | "routines";
 
 export default function GymPage() {
   const [phase, setPhase] = useState<Phase>("setup");
@@ -37,6 +38,49 @@ export default function GymPage() {
   useEffect(() => {
     setPastSessions(loadGymSessions());
   }, []);
+
+  // Routines
+  const [routines, setRoutines] = useState<GymRoutine[]>([]);
+  useEffect(() => {
+    setRoutines(loadGymRoutines());
+  }, []);
+
+  function refreshRoutines() {
+    setRoutines(loadGymRoutines());
+  }
+
+  // ─── Load from Routine ───────────────────────────────────
+  function loadFromRoutine(routine: GymRoutine) {
+    setTrainingType(routine.trainingType);
+    setMuscleGroup(routine.muscleGroup ?? "");
+    setExercises(
+      routine.exercises.map((re) => ({
+        id: crypto.randomUUID(),
+        name: re.name,
+        sets: Array.from({ length: re.defaultSets }, () => ({
+          weightKg: null,
+          reps: null,
+          isFailure: false,
+        })),
+      }))
+    );
+    setPhase("logging");
+  }
+
+  // ─── Save Session as Routine ─────────────────────────────
+  function handleSaveAsRoutine(name: string) {
+    if (!savedSession || savedSession.exercises.length === 0) return;
+    createGymRoutine({
+      name,
+      trainingType: savedSession.trainingType,
+      muscleGroup: savedSession.muscleGroup,
+      exercises: savedSession.exercises.map((ex) => ({
+        name: ex.name,
+        defaultSets: ex.sets.length,
+      })),
+    });
+    refreshRoutines();
+  }
 
   // ─── Just Walked In ────────────────────────────────────
   function handleJustWalkedIn() {
@@ -218,6 +262,9 @@ export default function GymPage() {
 
   // ─── Setup Phase ───────────────────────────────────────
   if (phase === "setup") {
+    // Filter routines by current training type
+    const filteredRoutines = routines.filter((r) => r.trainingType === trainingType);
+
     return (
       <div className="flex flex-col min-h-screen px-4 py-6">
         <header className="mb-6">
@@ -281,6 +328,51 @@ export default function GymPage() {
           </section>
         )}
 
+        {/* Saved Routines */}
+        {filteredRoutines.length > 0 && (
+          <section className="mb-6">
+            <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+              Saved Routines
+            </h2>
+            <div className="space-y-2">
+              {filteredRoutines.map((routine) => (
+                <button
+                  key={routine.id}
+                  onClick={() => loadFromRoutine(routine)}
+                  className="w-full rounded-xl bg-surface-800 border border-surface-700 px-4 py-3 text-left hover:border-brand/40 transition-all active:scale-[0.98] group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-semibold text-neutral-200 group-hover:text-white">
+                        {routine.name}
+                      </span>
+                      {routine.muscleGroup && (
+                        <span className="ml-2 text-xs text-neutral-500">{routine.muscleGroup}</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-brand font-medium">Load →</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {routine.exercises.slice(0, 5).map((ex, i) => (
+                      <span
+                        key={i}
+                        className="rounded-full bg-surface-700 px-2 py-0.5 text-[10px] text-neutral-400"
+                      >
+                        {ex.name} ({ex.defaultSets}s)
+                      </span>
+                    ))}
+                    {routine.exercises.length > 5 && (
+                      <span className="rounded-full bg-surface-700 px-2 py-0.5 text-[10px] text-neutral-500">
+                        +{routine.exercises.length - 5} more
+                      </span>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         <button
           onClick={handleStartLogging}
           className="w-full rounded-xl bg-brand hover:bg-brand-dark py-4 text-white font-bold text-base active:scale-[0.98] transition-all mt-auto mb-4"
@@ -288,15 +380,25 @@ export default function GymPage() {
           Start Logging →
         </button>
 
-        {/* Session Archive Link */}
-        {pastSessions.length > 0 && (
-          <button
-            onClick={() => setPhase("archive")}
-            className="w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 hover:text-neutral-200 font-medium transition-colors mt-4"
-          >
-            📂 View Session Archive ({pastSessions.length} sessions)
-          </button>
-        )}
+        {/* Bottom actions */}
+        <div className="flex gap-3 mt-2">
+          {pastSessions.length > 0 && (
+            <button
+              onClick={() => setPhase("archive")}
+              className="flex-1 rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 hover:text-neutral-200 font-medium transition-colors"
+            >
+              📂 Archive ({pastSessions.length})
+            </button>
+          )}
+          {routines.length > 0 && (
+            <button
+              onClick={() => setPhase("routines")}
+              className="flex-1 rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 hover:text-neutral-200 font-medium transition-colors"
+            >
+              📋 Routines ({routines.length})
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -461,6 +563,18 @@ export default function GymPage() {
     );
   }
 
+  // ─── Routines Management Phase ────────────────────────
+  if (phase === "routines") {
+    return (
+      <RoutinesManager
+        routines={routines}
+        onBack={() => setPhase("setup")}
+        onRefresh={refreshRoutines}
+        onLoad={(r) => loadFromRoutine(r)}
+      />
+    );
+  }
+
   // ─── Archive Phase ─────────────────────────────────────
   if (phase === "archive") {
     // Group sessions by date
@@ -503,29 +617,132 @@ export default function GymPage() {
 
   // ─── Complete Phase ────────────────────────────────────
   return (
+    <CompletePhase
+      session={savedSession}
+      exercises={exercises}
+      onSaveAsRoutine={handleSaveAsRoutine}
+      onLogAnother={() => {
+        setPhase("setup");
+        setExercises([]);
+        setRpe(null);
+        setNotes("");
+        setDurationMinutes(null);
+        setMuscleGroup("");
+        setSavedSession(null);
+      }}
+    />
+  );
+}
+
+// ─── Complete Phase Component ───────────────────────────────
+function CompletePhase({
+  session,
+  exercises,
+  onSaveAsRoutine,
+  onLogAnother,
+}: {
+  session: GymSessionLocal | null;
+  exercises: GymExerciseLocal[];
+  onSaveAsRoutine: (name: string) => void;
+  onLogAnother: () => void;
+}) {
+  const [showSaveRoutine, setShowSaveRoutine] = useState(false);
+  const [routineName, setRoutineName] = useState("");
+  const [routineSaved, setRoutineSaved] = useState(false);
+
+  // Default name from session
+  const defaultName = session
+    ? session.trainingType === "gym"
+      ? `${session.muscleGroup || "Gym"} Session`
+      : session.trainingType === "bjj"
+        ? "BJJ Session"
+        : "Run Session"
+    : "New Routine";
+
+  function handleSaveRoutine() {
+    const name = routineName.trim() || defaultName;
+    onSaveAsRoutine(name);
+    setRoutineSaved(true);
+    setShowSaveRoutine(false);
+  }
+
+  return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6 py-10 text-center">
       <div className="text-6xl mb-4">💪</div>
       <h1 className="text-2xl font-black text-brand mb-2">Session Logged!</h1>
-      {savedSession?.justWalkedIn ? (
+      {session?.justWalkedIn ? (
         <p className="text-neutral-400 text-sm mb-6">
           Just showing up counts. Training binary habit marked done.
         </p>
       ) : (
         <div className="text-neutral-400 text-sm mb-6 space-y-1">
           <p>
-            {savedSession?.trainingType === "gym"
-              ? `🏋️ ${savedSession.muscleGroup || "Gym"}`
-              : savedSession?.trainingType === "bjj"
+            {session?.trainingType === "gym"
+              ? `🏋️ ${session.muscleGroup || "Gym"}`
+              : session?.trainingType === "bjj"
                 ? "🥋 BJJ"
                 : "🏃 Run"}
-            {savedSession?.durationMinutes ? ` • ${savedSession.durationMinutes} min` : ""}
-            {savedSession?.rpe ? ` • Intensity ${savedSession.rpe}/10` : ""}
+            {session?.durationMinutes ? ` • ${session.durationMinutes} min` : ""}
+            {session?.rpe ? ` • Intensity ${session.rpe}/10` : ""}
           </p>
-          {savedSession && savedSession.exercises.length > 0 && (
+          {session && session.exercises.length > 0 && (
             <p>
-              {savedSession.exercises.length} exercise{savedSession.exercises.length > 1 ? "s" : ""} logged
+              {session.exercises.length} exercise{session.exercises.length > 1 ? "s" : ""} logged
             </p>
           )}
+        </div>
+      )}
+
+      {/* Save as Routine — only show for non-justWalkedIn with exercises */}
+      {session && !session.justWalkedIn && session.exercises.length > 0 && !routineSaved && (
+        <div className="w-full max-w-sm mb-6">
+          {!showSaveRoutine ? (
+            <button
+              onClick={() => setShowSaveRoutine(true)}
+              className="w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 hover:text-neutral-200 hover:border-brand/30 font-medium transition-all"
+            >
+              📋 Save as Routine
+            </button>
+          ) : (
+            <div className="rounded-xl bg-surface-800 border border-surface-700 p-4 space-y-3">
+              <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
+                Name this routine
+              </p>
+              <input
+                value={routineName}
+                onChange={(e) => setRoutineName(e.target.value)}
+                placeholder={defaultName}
+                autoFocus
+                className="w-full bg-surface-700 rounded-lg px-4 py-2.5 text-sm text-white border-none outline-none focus:ring-2 focus:ring-brand/50"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveRoutine();
+                }}
+              />
+              <div className="text-[10px] text-neutral-600">
+                {session.exercises.map((ex) => ex.name).join(" • ")}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowSaveRoutine(false)}
+                  className="flex-1 rounded-lg bg-surface-700 py-2 text-xs text-neutral-400 font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveRoutine}
+                  className="flex-1 rounded-lg bg-brand py-2 text-xs text-white font-bold"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {routineSaved && (
+        <div className="rounded-lg bg-done/10 border border-done/30 px-4 py-2 mb-6">
+          <p className="text-xs text-done font-medium">✓ Routine saved!</p>
         </div>
       )}
 
@@ -537,20 +754,443 @@ export default function GymPage() {
           🏠 Dashboard
         </a>
         <button
-          onClick={() => {
-            setPhase("setup");
-            setExercises([]);
-            setRpe(null);
-            setNotes("");
-            setDurationMinutes(null);
-            setMuscleGroup("");
-            setSavedSession(null);
-          }}
+          onClick={onLogAnother}
           className="rounded-xl bg-brand hover:bg-brand-dark px-6 py-3 text-sm font-bold text-white transition-colors"
         >
           Log Another
         </button>
       </div>
+    </div>
+  );
+}
+
+// ─── Routines Manager ──────────────────────────────────────
+function RoutinesManager({
+  routines,
+  onBack,
+  onRefresh,
+  onLoad,
+}: {
+  routines: GymRoutine[];
+  onBack: () => void;
+  onRefresh: () => void;
+  onLoad: (r: GymRoutine) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editExercises, setEditExercises] = useState<GymRoutineExercise[]>([]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState<TrainingType>("gym");
+  const [newMuscle, setNewMuscle] = useState("");
+  const [newExercises, setNewExercises] = useState<GymRoutineExercise[]>([]);
+  const [newExInput, setNewExInput] = useState("");
+
+  function startEdit(routine: GymRoutine) {
+    setEditingId(routine.id);
+    setEditName(routine.name);
+    setEditExercises([...routine.exercises]);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditName("");
+    setEditExercises([]);
+  }
+
+  function saveEdit(id: string) {
+    updateGymRoutine(id, {
+      name: editName.trim(),
+      exercises: editExercises,
+    });
+    cancelEdit();
+    onRefresh();
+  }
+
+  function handleDelete(id: string) {
+    deleteGymRoutine(id);
+    setConfirmDeleteId(null);
+    onRefresh();
+  }
+
+  function handleCreateRoutine() {
+    if (!newName.trim() || newExercises.length === 0) return;
+    createGymRoutine({
+      name: newName.trim(),
+      trainingType: newType,
+      muscleGroup: newType === "gym" ? newMuscle || null : null,
+      exercises: newExercises,
+    });
+    setShowCreate(false);
+    setNewName("");
+    setNewType("gym");
+    setNewMuscle("");
+    setNewExercises([]);
+    onRefresh();
+  }
+
+  // Group by training type
+  const grouped: Record<TrainingType, GymRoutine[]> = { gym: [], bjj: [], run: [], rest: [] };
+  for (const r of routines) {
+    grouped[r.trainingType].push(r);
+  }
+
+  return (
+    <div className="flex flex-col min-h-screen px-4 py-6">
+      <header className="mb-6">
+        <button
+          onClick={onBack}
+          className="text-neutral-500 text-sm hover:text-neutral-300"
+        >
+          ← Back
+        </button>
+        <h1 className="text-xl font-bold mt-1">📋 Saved Routines</h1>
+        <p className="text-xs text-neutral-500 mt-1">
+          {routines.length} routine{routines.length !== 1 ? "s" : ""}
+        </p>
+      </header>
+
+      {/* Create new routine */}
+      {!showCreate ? (
+        <button
+          onClick={() => setShowCreate(true)}
+          className="w-full rounded-xl bg-surface-800 border border-dashed border-surface-600 py-3 text-sm text-neutral-400 hover:text-brand hover:border-brand/40 font-medium transition-all mb-6"
+        >
+          ➕ Create Routine
+        </button>
+      ) : (
+        <div className="rounded-xl bg-surface-800 border border-brand/30 p-4 mb-6 space-y-3">
+          <p className="text-xs font-bold text-brand uppercase tracking-wider">New Routine</p>
+
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Routine name..."
+            autoFocus
+            className="w-full bg-surface-700 rounded-lg px-4 py-2.5 text-sm text-white border-none outline-none focus:ring-2 focus:ring-brand/50"
+          />
+
+          {/* Training type */}
+          <div className="flex gap-2">
+            {(["gym", "bjj", "run"] as TrainingType[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setNewType(t)}
+                className={`flex-1 rounded-lg py-2 text-xs font-bold uppercase transition-colors ${
+                  newType === t
+                    ? "bg-brand text-white"
+                    : "bg-surface-700 text-neutral-500"
+                }`}
+              >
+                {t === "gym" ? "🏋️ Gym" : t === "bjj" ? "🥋 BJJ" : "🏃 Run"}
+              </button>
+            ))}
+          </div>
+
+          {/* Muscle group (gym only) */}
+          {newType === "gym" && (
+            <div className="flex flex-wrap gap-1.5">
+              {MUSCLE_GROUPS.map((mg) => (
+                <button
+                  key={mg}
+                  onClick={() => setNewMuscle(mg)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    newMuscle === mg
+                      ? "bg-brand text-white"
+                      : "bg-surface-700 text-neutral-500"
+                  }`}
+                >
+                  {mg}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Exercises */}
+          <div>
+            <p className="text-[10px] text-neutral-500 uppercase tracking-wider mb-2">Exercises</p>
+            {newExercises.length > 0 && (
+              <div className="space-y-1 mb-2">
+                {newExercises.map((ex, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-xs text-neutral-300 flex-1">{ex.name}</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() =>
+                          setNewExercises((prev) =>
+                            prev.map((e, j) =>
+                              j === i ? { ...e, defaultSets: Math.max(1, e.defaultSets - 1) } : e
+                            )
+                          )
+                        }
+                        className="w-5 h-5 rounded bg-surface-700 text-xs text-neutral-500"
+                      >
+                        −
+                      </button>
+                      <span className="text-[10px] text-neutral-400 w-8 text-center">
+                        {ex.defaultSets}s
+                      </span>
+                      <button
+                        onClick={() =>
+                          setNewExercises((prev) =>
+                            prev.map((e, j) =>
+                              j === i ? { ...e, defaultSets: Math.min(8, e.defaultSets + 1) } : e
+                            )
+                          )
+                        }
+                        className="w-5 h-5 rounded bg-surface-700 text-xs text-neutral-500"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => setNewExercises((prev) => prev.filter((_, j) => j !== i))}
+                      className="text-xs text-neutral-600 hover:text-missed"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Quick add suggestions for gym */}
+            {newType === "gym" && newMuscle && COMMON_EXERCISES[newMuscle] && (
+              <div className="flex flex-wrap gap-1 mb-2">
+                {COMMON_EXERCISES[newMuscle]
+                  .filter((s) => !newExercises.some((e) => e.name === s))
+                  .map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setNewExercises((prev) => [...prev, { name: s, defaultSets: 3 }])}
+                      className="rounded bg-surface-700 px-2 py-0.5 text-[10px] text-neutral-500 hover:text-neutral-300"
+                    >
+                      + {s}
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <input
+                value={newExInput}
+                onChange={(e) => setNewExInput(e.target.value)}
+                placeholder="Add exercise..."
+                className="flex-1 bg-surface-700 rounded-lg px-3 py-2 text-xs text-white border-none outline-none focus:ring-2 focus:ring-brand/50"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newExInput.trim()) {
+                    setNewExercises((prev) => [...prev, { name: newExInput.trim(), defaultSets: 3 }]);
+                    setNewExInput("");
+                  }
+                }}
+              />
+              <button
+                onClick={() => {
+                  if (newExInput.trim()) {
+                    setNewExercises((prev) => [...prev, { name: newExInput.trim(), defaultSets: 3 }]);
+                    setNewExInput("");
+                  }
+                }}
+                className="rounded-lg bg-brand px-3 py-2 text-xs font-bold text-white"
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => {
+                setShowCreate(false);
+                setNewName("");
+                setNewExercises([]);
+              }}
+              className="flex-1 rounded-lg bg-surface-700 py-2 text-xs text-neutral-400 font-medium"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleCreateRoutine}
+              disabled={!newName.trim() || newExercises.length === 0}
+              className="flex-1 rounded-lg bg-brand py-2 text-xs text-white font-bold disabled:opacity-40"
+            >
+              Create Routine
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Routines by type */}
+      {(["gym", "bjj", "run"] as TrainingType[]).map((type) => {
+        const typeRoutines = grouped[type];
+        if (typeRoutines.length === 0) return null;
+        const typeLabel = type === "gym" ? "🏋️ Gym" : type === "bjj" ? "🥋 BJJ" : "🏃 Run";
+
+        return (
+          <section key={type} className="mb-6">
+            <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+              {typeLabel} Routines
+            </h2>
+            <div className="space-y-3">
+              {typeRoutines.map((routine) => {
+                const isEditing = editingId === routine.id;
+                const isConfirmingDelete = confirmDeleteId === routine.id;
+
+                return (
+                  <div
+                    key={routine.id}
+                    className="rounded-xl bg-surface-800 border border-surface-700 p-4"
+                  >
+                    {isEditing ? (
+                      <div className="space-y-3">
+                        <input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="w-full bg-surface-700 rounded-lg px-3 py-2 text-sm text-white border-none outline-none focus:ring-2 focus:ring-brand/50"
+                        />
+                        <div className="space-y-1">
+                          {editExercises.map((ex, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <span className="text-xs text-neutral-300 flex-1">{ex.name}</span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() =>
+                                    setEditExercises((prev) =>
+                                      prev.map((e, j) =>
+                                        j === i ? { ...e, defaultSets: Math.max(1, e.defaultSets - 1) } : e
+                                      )
+                                    )
+                                  }
+                                  className="w-5 h-5 rounded bg-surface-700 text-xs text-neutral-500"
+                                >
+                                  −
+                                </button>
+                                <span className="text-[10px] text-neutral-400 w-8 text-center">
+                                  {ex.defaultSets}s
+                                </span>
+                                <button
+                                  onClick={() =>
+                                    setEditExercises((prev) =>
+                                      prev.map((e, j) =>
+                                        j === i ? { ...e, defaultSets: Math.min(8, e.defaultSets + 1) } : e
+                                      )
+                                    )
+                                  }
+                                  className="w-5 h-5 rounded bg-surface-700 text-xs text-neutral-500"
+                                >
+                                  +
+                                </button>
+                              </div>
+                              <button
+                                onClick={() => setEditExercises((prev) => prev.filter((_, j) => j !== i))}
+                                className="text-xs text-neutral-600 hover:text-missed"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={cancelEdit}
+                            className="flex-1 rounded-lg bg-surface-700 py-2 text-xs text-neutral-400 font-medium"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => saveEdit(routine.id)}
+                            className="flex-1 rounded-lg bg-brand py-2 text-xs text-white font-bold"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between mb-2">
+                          <div>
+                            <span className="text-sm font-semibold text-neutral-200">
+                              {routine.name}
+                            </span>
+                            {routine.muscleGroup && (
+                              <span className="ml-2 text-xs text-neutral-500">
+                                {routine.muscleGroup}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => onLoad(routine)}
+                            className="rounded-lg bg-brand/10 border border-brand/20 px-3 py-1 text-xs text-brand font-medium hover:bg-brand/20 transition-colors"
+                          >
+                            Load →
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1 mb-3">
+                          {routine.exercises.map((ex, i) => (
+                            <span
+                              key={i}
+                              className="rounded-full bg-surface-700 px-2 py-0.5 text-[10px] text-neutral-400"
+                            >
+                              {ex.name} ({ex.defaultSets}s)
+                            </span>
+                          ))}
+                        </div>
+
+                        {isConfirmingDelete ? (
+                          <div className="flex items-center gap-2 rounded-lg bg-missed/10 border border-missed/20 px-3 py-2">
+                            <span className="text-xs text-missed flex-1">Delete this routine?</span>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="text-xs text-neutral-400 font-medium"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleDelete(routine.id)}
+                              className="text-xs text-missed font-bold"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-3 text-xs">
+                            <button
+                              onClick={() => startEdit(routine)}
+                              className="text-neutral-500 hover:text-neutral-300 transition-colors"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(routine.id)}
+                              className="text-neutral-600 hover:text-missed transition-colors"
+                            >
+                              Delete
+                            </button>
+                            <span className="text-neutral-700 ml-auto text-[10px]">
+                              {new Date(routine.updatedAt).toLocaleDateString("en-GB", {
+                                day: "numeric",
+                                month: "short",
+                              })}
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+
+      {routines.length === 0 && (
+        <div className="flex-1 flex items-center justify-center text-neutral-600 text-sm">
+          No routines saved yet. Complete a session and tap &quot;Save as Routine&quot;.
+        </div>
+      )}
     </div>
   );
 }

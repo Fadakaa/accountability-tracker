@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState, getTodayLog, getLevelForXP, recalculateStreaks, saveState, loadAdminTasks } from "@/lib/store";
-import type { LocalState, AdminTask } from "@/lib/store";
+import { loadState, getTodayLog, getLevelForXP, recalculateStreaks, saveState, loadAdminTasks, recordAppOpen } from "@/lib/store";
+import type { LocalState, AdminTask, ShowingUpData } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -20,6 +20,7 @@ export default function Home() {
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
   const [nextCheckin, setNextCheckin] = useState<string>("");
+  const [showingUp, setShowingUp] = useState<ShowingUpData | null>(null);
 
   useEffect(() => {
     // Load state and recalculate streaks from log history (source of truth)
@@ -35,6 +36,7 @@ export default function Home() {
     setWeakHabits(getWeakHabits());
     setAdminTasks(loadAdminTasks());
     setNextCheckin(getNextCheckinDisplay());
+    setShowingUp(recordAppOpen());
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();
       syncScheduleToServiceWorker();
@@ -241,6 +243,21 @@ export default function Home() {
           Next check-in: <span className="text-white font-medium">{nextCheckin}</span>
         </p>
       </section>
+
+      {/* You Keep Showing Up */}
+      {showingUp && showingUp.uniqueDays >= 2 && (
+        <section className="rounded-xl bg-surface-800 border border-done/20 p-4 mb-6 text-center">
+          <p className="text-xs text-done font-medium mb-1">
+            You keep showing up 💪
+          </p>
+          <p className="text-2xl font-black text-white">
+            {showingUp.uniqueDays} <span className="text-sm font-medium text-neutral-400">days opened</span>
+          </p>
+          <p className="text-[10px] text-neutral-600 mt-1">
+            {showingUp.totalOpens} total opens since {new Date(showingUp.firstOpenDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+          </p>
+        </section>
+      )}
 
       {/* ─── Command Centre ─── */}
       <nav className="mt-auto pb-4 space-y-4">

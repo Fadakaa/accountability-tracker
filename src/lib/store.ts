@@ -5,9 +5,11 @@ import type { LogStatus, SprintIntensity, TrainingType, HabitStack, Habit } from
 
 const STORAGE_KEY = "accountability-tracker";
 const GYM_STORAGE_KEY = "accountability-gym";
+const GYM_ROUTINES_KEY = "accountability-gym-routines";
 const SETTINGS_KEY = "accountability-settings";
 const DEFERRED_KEY = "accountability-deferred";
 const ADMIN_KEY = "accountability-admin";
+const SHOWING_UP_KEY = "accountability-showing-up";
 
 // ─── Deferred Habits (temporary reschedule for today only) ───
 export interface DeferredHabit {
@@ -481,6 +483,109 @@ export function saveGymSession(session: GymSessionLocal): void {
   const sessions = loadGymSessions();
   sessions.push(session);
   localStorage.setItem(GYM_STORAGE_KEY, JSON.stringify(sessions));
+}
+
+// ─── Gym Routines (saved exercise templates) ─────────────
+
+export interface GymRoutineExercise {
+  name: string;
+  defaultSets: number; // how many empty sets to pre-fill
+}
+
+export interface GymRoutine {
+  id: string;
+  name: string;
+  trainingType: TrainingType;
+  muscleGroup: string | null;
+  exercises: GymRoutineExercise[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function loadGymRoutines(): GymRoutine[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(GYM_ROUTINES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as GymRoutine[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveGymRoutines(routines: GymRoutine[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(GYM_ROUTINES_KEY, JSON.stringify(routines));
+}
+
+export function createGymRoutine(routine: Omit<GymRoutine, "id" | "createdAt" | "updatedAt">): GymRoutine {
+  const now = new Date().toISOString();
+  const newRoutine: GymRoutine = {
+    ...routine,
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const routines = loadGymRoutines();
+  routines.push(newRoutine);
+  saveGymRoutines(routines);
+  return newRoutine;
+}
+
+export function updateGymRoutine(id: string, updates: Partial<Pick<GymRoutine, "name" | "exercises" | "muscleGroup">>): void {
+  const routines = loadGymRoutines();
+  const idx = routines.findIndex((r) => r.id === id);
+  if (idx === -1) return;
+  routines[idx] = { ...routines[idx], ...updates, updatedAt: new Date().toISOString() };
+  saveGymRoutines(routines);
+}
+
+export function deleteGymRoutine(id: string): void {
+  const routines = loadGymRoutines().filter((r) => r.id !== id);
+  saveGymRoutines(routines);
+}
+
+// ─── "You Keep Showing Up" Counter ──────────────────────
+
+export interface ShowingUpData {
+  totalOpens: number;
+  uniqueDays: number;
+  lastOpenDate: string; // YYYY-MM-DD
+  firstOpenDate: string; // YYYY-MM-DD
+}
+
+export function recordAppOpen(): ShowingUpData {
+  if (typeof window === "undefined") return { totalOpens: 0, uniqueDays: 0, lastOpenDate: "", firstOpenDate: "" };
+  const today = getToday();
+  try {
+    const raw = localStorage.getItem(SHOWING_UP_KEY);
+    const data: ShowingUpData = raw
+      ? JSON.parse(raw)
+      : { totalOpens: 0, uniqueDays: 0, lastOpenDate: "", firstOpenDate: today };
+
+    data.totalOpens += 1;
+    if (data.lastOpenDate !== today) {
+      data.uniqueDays += 1;
+      data.lastOpenDate = today;
+    }
+    if (!data.firstOpenDate) data.firstOpenDate = today;
+
+    localStorage.setItem(SHOWING_UP_KEY, JSON.stringify(data));
+    return data;
+  } catch {
+    return { totalOpens: 1, uniqueDays: 1, lastOpenDate: today, firstOpenDate: today };
+  }
+}
+
+export function loadShowingUpData(): ShowingUpData {
+  if (typeof window === "undefined") return { totalOpens: 0, uniqueDays: 0, lastOpenDate: "", firstOpenDate: "" };
+  try {
+    const raw = localStorage.getItem(SHOWING_UP_KEY);
+    if (!raw) return { totalOpens: 0, uniqueDays: 0, lastOpenDate: "", firstOpenDate: "" };
+    return JSON.parse(raw) as ShowingUpData;
+  } catch {
+    return { totalOpens: 0, uniqueDays: 0, lastOpenDate: "", firstOpenDate: "" };
+  }
 }
 
 export function getWeekLogs(state: LocalState): DayLog[] {
