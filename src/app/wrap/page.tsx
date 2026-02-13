@@ -12,9 +12,10 @@ import {
   loadAdminTasks,
   getTomorrowDate,
   removeAdminTask,
+  recalculateStreaks,
 } from "@/lib/store";
 import type { LocalState, DayLog, WrapReflection, AdminTask } from "@/lib/store";
-import { getHabitsWithHistory } from "@/lib/resolvedHabits";
+import { getHabitsWithHistory, getResolvedHabits } from "@/lib/resolvedHabits";
 import { getFlameIcon, XP_VALUES } from "@/lib/habits";
 import type { Habit } from "@/types/database";
 import { isBinaryLike } from "@/types/database";
@@ -56,7 +57,16 @@ export default function WrapPage() {
   const touchStartY = useRef(0);
 
   useEffect(() => {
-    setState(loadState());
+    const loaded = loadState();
+    // Recalculate streaks from log history (source of truth)
+    const allHabits = getResolvedHabits();
+    const habitSlugsById: Record<string, string> = {};
+    for (const h of allHabits) {
+      habitSlugsById[h.id] = h.slug;
+    }
+    loaded.streaks = recalculateStreaks(loaded, habitSlugsById);
+    saveState(loaded);
+    setState(loaded);
     setTomorrowTasks(loadAdminTasks(getTomorrowDate()));
   }, []);
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadState, saveState, getToday, saveGymSession, loadGymSessions } from "@/lib/store";
+import { loadState, saveState, getToday, saveGymSession, loadGymSessions, recalculateStreaks } from "@/lib/store";
 import type { GymSessionLocal, GymExerciseLocal, GymSetLocal, GymRoutine, GymRoutineExercise } from "@/lib/store";
 import { loadGymRoutines, createGymRoutine, updateGymRoutine, deleteGymRoutine } from "@/lib/store";
 import type { TrainingType } from "@/types/database";
@@ -102,8 +102,12 @@ export default function GymPage() {
           submittedAt: new Date().toISOString(),
         });
       }
-      // Update streak
-      state.streaks["training"] = (state.streaks["training"] ?? 0) + 1;
+      // Recalculate streaks from log history (source of truth)
+      const allHabits = getResolvedHabits();
+      const habitSlugsById: Record<string, string> = {};
+      for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
+      state.streaks = recalculateStreaks(state, habitSlugsById);
+
       state.totalXp += XP_VALUES.BARE_MINIMUM_HABIT;
       saveState(state);
     }
@@ -245,8 +249,12 @@ export default function GymPage() {
         xp += XP_VALUES.MEASURED_AT_TARGET;
       }
 
-      // Update streak
-      state.streaks["training"] = (state.streaks["training"] ?? 0) + 1;
+      // Recalculate streaks from log history (source of truth)
+      const allHabits = getResolvedHabits();
+      const habitSlugsById: Record<string, string> = {};
+      for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
+      state.streaks = recalculateStreaks(state, habitSlugsById);
+
       state.totalXp += xp;
 
       // Update today's log XP

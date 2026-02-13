@@ -373,12 +373,13 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
     if (todayEntry?.status === "done") {
       // Today is done — start counting from today
       startDate = today;
-    } else if (todayEntry) {
-      // Today has a non-done entry (missed / later) — streak is 0
+    } else if (todayEntry?.status === "missed") {
+      // Today is explicitly missed — streak is 0
       streaks[slug] = 0;
       continue;
     } else {
-      // Today not logged yet — start counting from yesterday (grace period)
+      // Today not logged yet OR "later" (deferred) — grace period,
+      // start counting from yesterday since the day isn't over yet
       const d = new Date(today + "T12:00:00");
       d.setDate(d.getDate() - 1);
       startDate = d.toISOString().slice(0, 10);

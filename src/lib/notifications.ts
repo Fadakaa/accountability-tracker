@@ -3,7 +3,7 @@
 // 11PM warning, midnight auto-miss
 
 import { getRandomQuote } from "./habits";
-import { loadState, saveState, getToday, loadSettings } from "./store";
+import { loadState, saveState, getToday, loadSettings, recalculateStreaks } from "./store";
 import { getResolvedHabits } from "./resolvedHabits";
 import { isStackComplete as sharedIsStackComplete, areAllStacksComplete, getCheckinSchedule, getCurrentTime, STACK_ORDER } from "./schedule";
 import type { HabitStack } from "@/types/database";
@@ -374,11 +374,11 @@ function autoMissHabit(habitId: string): void {
     });
   }
 
-  // Break streak
-  const habit = getResolvedHabits().find((h) => h.id === habitId);
-  if (habit) {
-    state.streaks[habit.slug] = 0;
-  }
+  // Recalculate all streaks from log history (source of truth)
+  const allHabits = getResolvedHabits();
+  const habitSlugsById: Record<string, string> = {};
+  for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
+  state.streaks = recalculateStreaks(state, habitSlugsById);
 
   saveState(state);
 }
@@ -441,7 +441,6 @@ function tickEndOfDay(): void {
         if (yesterdayLog) {
           yesterdayLog.entries[habit.id] = { status: "missed", value: null };
         }
-        state.streaks[habit.slug] = 0;
         missedCount++;
       }
     }
@@ -459,6 +458,12 @@ function tickEndOfDay(): void {
           submittedAt: new Date().toISOString(),
         });
       }
+
+      // Recalculate all streaks from log history (source of truth)
+      const allResolved = getResolvedHabits();
+      const habitSlugsById: Record<string, string> = {};
+      for (const h of allResolved) { habitSlugsById[h.id] = h.slug; }
+      state.streaks = recalculateStreaks(state, habitSlugsById);
 
       saveState(state);
 
