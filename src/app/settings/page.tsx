@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings as loadSettingsLocal, loadState as loadStateLocal, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks } from "@/lib/store";
+import { loadSettings as loadSettingsLocal, loadState as loadStateLocal, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks, getLevelForXP } from "@/lib/store";
 import type { UserSettings, HabitOverride, LocalState, NotificationSlot } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
@@ -1401,8 +1401,86 @@ function ResetDataButton() {
   const [streakResetDone, setStreakResetDone] = useState(false);
   const [recalcDone, setRecalcDone] = useState(false);
   const [recalcMessage, setRecalcMessage] = useState("");
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState("");
   const [fullResetStep, setFullResetStep] = useState(0);
   const [fullResetDone, setFullResetDone] = useState(false);
+
+  function handleRecoverAll() {
+    const state = loadStateLocal();
+    if (!state.logs || state.logs.length === 0) {
+      setRecoveryMessage("No logs found — nothing to recover from");
+      setRecoveryDone(true);
+      setTimeout(() => setRecoveryDone(false), 5000);
+      return;
+    }
+
+    // 1. Recalculate total XP from log history
+    let totalXp = 0;
+    for (const log of state.logs) {
+      totalXp += log.xpEarned || 0;
+    }
+
+    // 2. Recalculate level from XP
+    const { level } = getLevelForXP(totalXp);
+
+    // 3. Recalculate all habit streaks
+    const allHabits = getResolvedHabits();
+    const habitSlugsById: Record<string, string> = {};
+    for (const h of allHabits) {
+      habitSlugsById[h.id] = h.slug;
+    }
+    const streaks = recalculateStreaks(state, habitSlugsById);
+
+    // 4. Recalculate bare minimum streak (walk backwards through logs)
+    const logByDate = new Map<string, typeof state.logs[0]>();
+    for (const log of state.logs) {
+      logByDate.set(log.date, log);
+    }
+    let bmStreak = 0;
+    const today = new Date();
+    // Start from yesterday if today not logged yet
+    const todayStr = today.toISOString().slice(0, 10);
+    const todayLog = logByDate.get(todayStr);
+    let cursor = new Date(today);
+    if (todayLog?.bareMinimumMet) {
+      bmStreak++;
+      cursor.setDate(cursor.getDate() - 1);
+    } else if (!todayLog) {
+      // Grace period — today not logged yet, start from yesterday
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    // Walk backwards
+    for (let i = 0; i < 365; i++) {
+      const dateStr = cursor.toISOString().slice(0, 10);
+      const log = logByDate.get(dateStr);
+      if (log?.bareMinimumMet) {
+        bmStreak++;
+        cursor.setDate(cursor.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+
+    // 5. Apply all recovered values
+    state.totalXp = totalXp;
+    state.currentLevel = level;
+    state.streaks = streaks;
+    state.bareMinimumStreak = bmStreak;
+    saveStateToDB(state);
+
+    const nonZeroStreaks = Object.entries(streaks).filter(([, v]) => v > 0);
+    const streakSummary = nonZeroStreaks.length > 0
+      ? nonZeroStreaks.slice(0, 3).map(([k, v]) => `${k}: ${v}d`).join(", ") +
+        (nonZeroStreaks.length > 3 ? ` +${nonZeroStreaks.length - 3} more` : "")
+      : "no active streaks";
+
+    setRecoveryMessage(
+      `✓ Recovered! ${totalXp} XP (Lv${level}), BM streak: ${bmStreak}d, ${streakSummary}`
+    );
+    setRecoveryDone(true);
+    setTimeout(() => setRecoveryDone(false), 10000);
+  }
 
   function handleRecalculateStreaks() {
     const state = loadStateLocal();
@@ -1465,6 +1543,21 @@ function ResetDataButton() {
 
   return (
     <div className="space-y-2">
+      {/* Recovery — recalculate XP, level, streaks, bare minimum from logs */}
+      <button
+        onClick={handleRecoverAll}
+        className={`w-full rounded-xl border py-3 text-sm transition-colors ${
+          recoveryDone
+            ? "border-done/30 bg-done/10 text-done font-medium"
+            : "border-brand/30 text-brand hover:bg-brand/10 hover:border-brand/50 font-bold"
+        }`}
+      >
+        {recoveryDone ? recoveryMessage : "🔁 Recover XP, Level & Streaks from History"}
+      </button>
+      <p className="text-[10px] text-neutral-600 text-center -mt-1">
+        Scans all check-in logs to rebuild XP, level, streaks & bare minimum streak
+      </p>
+
       {/* Recalculate streaks from log history — fixes incorrect counts */}
       <button
         onClick={handleRecalculateStreaks}
