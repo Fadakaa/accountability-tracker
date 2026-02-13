@@ -122,6 +122,17 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
   console.log("[migration] Starting data migration to Supabase...");
 
   try {
+    // 0. Ensure user_profile exists (all tables have FK to it)
+    // The trigger creates it on signup, but if user signed up before
+    // the SQL was run, they won't have one.
+    const { error: profileError } = await sb.from("user_profile").upsert(
+      { id: userId, timezone: "Europe/London" },
+      { onConflict: "id" }
+    );
+    if (profileError) {
+      console.warn("[migration] Profile upsert warning:", profileError);
+    }
+
     // 1. Seed habits if this user has none
     let idMap: Record<string, string> = {};
     const hasData = await hasExistingData(userId);
@@ -207,151 +218,166 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
       }
     }
 
+    // Each section is wrapped in try/catch so one failure doesn't block the rest.
+    // This ensures admin tasks, gym sessions etc. still upload even if daily logs fail.
+    const errors: string[] = [];
+
     // 5. Migrate daily logs
-    const state = loadState();
-    if (state.logs.length > 0) {
-      console.log("[migration] Migrating", state.logs.length, "day logs...");
-
-      // Process in batches of 10 days to avoid overwhelming the API
-      for (let i = 0; i < state.logs.length; i += 10) {
-        const batch = state.logs.slice(i, i + 10);
-
-        for (const dayLog of batch) {
-          // Remap habit IDs in the dayLog before transforming
-          const remappedLog = {
-            ...dayLog,
-            entries: Object.fromEntries(
-              Object.entries(dayLog.entries).map(([hid, v]) => [remapId(hid), v])
-            ),
-            badEntries: Object.fromEntries(
-              Object.entries(dayLog.badEntries).map(([hid, v]) => [remapId(hid), v])
-            ),
-          };
-          const { dailyLogs, badHabitLogs, summary } = dayLogToRows(remappedLog, userId);
-
-          if (dailyLogs.length > 0) {
-            await sb.from("daily_logs").upsert(
-              dailyLogs.map((r) => ({ ...r, id: crypto.randomUUID() })),
-              { onConflict: "habit_id,log_date" }
+    try {
+      const state = loadState();
+      if (state.logs.length > 0) {
+        console.log("[migration] Migrating", state.logs.length, "day logs...");
+        for (let i = 0; i < state.logs.length; i += 10) {
+          const batch = state.logs.slice(i, i + 10);
+          for (const dayLog of batch) {
+            const remappedLog = {
+              ...dayLog,
+              entries: Object.fromEntries(
+                Object.entries(dayLog.entries).map(([hid, v]) => [remapId(hid), v])
+              ),
+              badEntries: Object.fromEntries(
+                Object.entries(dayLog.badEntries).map(([hid, v]) => [remapId(hid), v])
+              ),
+            };
+            const { dailyLogs, badHabitLogs, summary } = dayLogToRows(remappedLog, userId);
+            if (dailyLogs.length > 0) {
+              await sb.from("daily_logs").upsert(
+                dailyLogs.map((r) => ({ ...r, id: crypto.randomUUID() })),
+                { onConflict: "habit_id,log_date" }
+              );
+            }
+            if (badHabitLogs.length > 0) {
+              await sb.from("bad_habit_logs").upsert(
+                badHabitLogs.map((r) => ({ ...r, id: crypto.randomUUID() })),
+                { onConflict: "habit_id,log_date" }
+              );
+            }
+            await sb.from("daily_log_summaries").upsert(
+              { ...summary, id: crypto.randomUUID() },
+              { onConflict: "user_id,log_date" }
             );
           }
-
-          if (badHabitLogs.length > 0) {
-            await sb.from("bad_habit_logs").upsert(
-              badHabitLogs.map((r) => ({ ...r, id: crypto.randomUUID() })),
-              { onConflict: "habit_id,log_date" }
-            );
-          }
-
-          await sb.from("daily_log_summaries").upsert(
-            { ...summary, id: crypto.randomUUID() },
-            { onConflict: "user_id,log_date" }
-          );
         }
       }
-    }
 
-    // 6. Migrate XP
-    await sb.from("user_xp").upsert({
-      user_id: userId,
-      total_xp: state.totalXp,
-      current_level: state.currentLevel,
-    }, { onConflict: "user_id" });
+      // 6. XP
+      await sb.from("user_xp").upsert({
+        user_id: userId, total_xp: state.totalXp, current_level: state.currentLevel,
+      }, { onConflict: "user_id" });
 
-    // 7. Migrate streaks
-    for (const [slug, count] of Object.entries(state.streaks)) {
-      // Find the habit ID for this slug
-      const habit = HABITS.find((h) => h.slug === slug) ??
-        settings.customHabits?.find((h) => h.slug === slug);
-      if (!habit) continue;
+      // 7. Streaks
+      for (const [slug, count] of Object.entries(state.streaks)) {
+        const habit = HABITS.find((h) => h.slug === slug) ??
+          settings.customHabits?.find((h) => h.slug === slug);
+        if (!habit) continue;
+        await sb.from("streaks").upsert({
+          user_id: userId, habit_id: remapId(habit.id),
+          current_count: count, longest_count: count,
+        }, { onConflict: "user_id,habit_id" });
+      }
 
-      await sb.from("streaks").upsert({
+      // 8. Bare minimum streak
+      await sb.from("bare_minimum_streak").upsert({
         user_id: userId,
-        habit_id: remapId(habit.id),
-        current_count: count,
-        longest_count: count, // Use current as longest (we don't track longest locally)
-      }, { onConflict: "user_id,habit_id" });
-    }
+        current_count: state.bareMinimumStreak,
+        longest_count: state.bareMinimumStreak,
+      }, { onConflict: "user_id" });
 
-    // 8. Migrate bare minimum streak
-    await sb.from("bare_minimum_streak").upsert({
-      user_id: userId,
-      current_count: state.bareMinimumStreak,
-      longest_count: state.bareMinimumStreak,
-    }, { onConflict: "user_id" });
-
-    // 9. Migrate sprints
-    if (state.activeSprint) {
-      const { sprint, tasks } = sprintToRows(state.activeSprint, userId);
-      await sb.from("sprints").upsert(sprint, { onConflict: "id" });
-      if (tasks.length > 0) {
-        await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
+      // 9. Sprints
+      if (state.activeSprint) {
+        const { sprint, tasks } = sprintToRows(state.activeSprint, userId);
+        await sb.from("sprints").upsert(sprint, { onConflict: "id" });
+        if (tasks.length > 0) await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
       }
-    }
-    for (const s of state.sprintHistory ?? []) {
-      const { sprint, tasks } = sprintToRows(s, userId);
-      await sb.from("sprints").upsert(sprint, { onConflict: "id" });
-      if (tasks.length > 0) {
-        await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
+      for (const s of state.sprintHistory ?? []) {
+        const { sprint, tasks } = sprintToRows(s, userId);
+        await sb.from("sprints").upsert(sprint, { onConflict: "id" });
+        if (tasks.length > 0) await sb.from("sprint_tasks").upsert(tasks, { onConflict: "id" });
       }
-    }
 
-    // 10. Migrate reflections
-    if (state.reflections && state.reflections.length > 0) {
-      const rows = state.reflections.map((r) => reflectionToRow(r, userId));
-      await sb.from("wrap_reflections").upsert(rows, { onConflict: "id" });
+      // 10. Reflections
+      if (state.reflections && state.reflections.length > 0) {
+        const rows = state.reflections.map((r) => reflectionToRow(r, userId));
+        await sb.from("wrap_reflections").upsert(rows, { onConflict: "id" });
+      }
+    } catch (err) {
+      console.warn("[migration] Daily logs/state section failed:", err);
+      errors.push("daily logs");
     }
 
     // 11. Migrate gym sessions
-    const gymSessions = loadGymSessions();
-    if (gymSessions.length > 0) {
-      console.log("[migration] Migrating", gymSessions.length, "gym sessions...");
-      for (const session of gymSessions) {
-        const { session: sessionRow, exercises } = gymSessionToRows(session, userId);
-        await sb.from("gym_sessions").upsert(sessionRow, { onConflict: "id" });
-        for (const ex of exercises) {
-          const { sets, ...exRow } = ex;
-          await sb.from("gym_exercises").upsert(exRow, { onConflict: "id" });
-          if (sets.length > 0) {
-            await sb.from("gym_sets").upsert(sets, { onConflict: "id" });
+    try {
+      const gymSessions = loadGymSessions();
+      if (gymSessions.length > 0) {
+        console.log("[migration] Migrating", gymSessions.length, "gym sessions...");
+        for (const session of gymSessions) {
+          const { session: sessionRow, exercises } = gymSessionToRows(session, userId);
+          await sb.from("gym_sessions").upsert(sessionRow, { onConflict: "id" });
+          for (const ex of exercises) {
+            const { sets, ...exRow } = ex;
+            await sb.from("gym_exercises").upsert(exRow, { onConflict: "id" });
+            if (sets.length > 0) {
+              await sb.from("gym_sets").upsert(sets, { onConflict: "id" });
+            }
           }
         }
       }
+    } catch (err) {
+      console.warn("[migration] Gym sessions failed:", err);
+      errors.push("gym sessions");
     }
 
     // 12. Migrate gym routines
-    const gymRoutines = loadGymRoutines();
-    if (gymRoutines.length > 0) {
-      for (const routine of gymRoutines) {
-        const { routine: routineRow, exercises } = gymRoutineToRows(routine, userId);
-        await sb.from("gym_routines").upsert(routineRow, { onConflict: "id" });
-        if (exercises.length > 0) {
-          await sb.from("gym_routine_exercises").insert(exercises);
+    try {
+      const gymRoutines = loadGymRoutines();
+      if (gymRoutines.length > 0) {
+        for (const routine of gymRoutines) {
+          const { routine: routineRow, exercises } = gymRoutineToRows(routine, userId);
+          await sb.from("gym_routines").upsert(routineRow, { onConflict: "id" });
+          if (exercises.length > 0) {
+            await sb.from("gym_routine_exercises").insert(exercises);
+          }
         }
       }
+    } catch (err) {
+      console.warn("[migration] Gym routines failed:", err);
+      errors.push("gym routines");
     }
 
     // 13. Migrate admin tasks
-    const adminTasks = loadAllAdminTasks();
-    if (adminTasks.length > 0) {
-      console.log("[migration] Migrating", adminTasks.length, "admin tasks...");
-      const rows = adminTasks.map((t) => adminTaskToRow(t, userId));
-      await sb.from("admin_tasks").upsert(rows, { onConflict: "id" });
+    try {
+      const adminTasks = loadAllAdminTasks();
+      if (adminTasks.length > 0) {
+        console.log("[migration] Migrating", adminTasks.length, "admin tasks...");
+        const rows = adminTasks.map((t) => adminTaskToRow(t, userId));
+        await sb.from("admin_tasks").upsert(rows, { onConflict: "id" });
+      }
+    } catch (err) {
+      console.warn("[migration] Admin tasks failed:", err);
+      errors.push("admin tasks");
     }
 
     // 14. Migrate showing up data
-    const showingUp = loadShowingUpData();
-    if (showingUp.totalOpens > 0) {
-      await sb.from("app_usage_stats").upsert({
-        ...showingUpToRow(showingUp, userId),
-      }, { onConflict: "user_id" });
+    try {
+      const showingUp = loadShowingUpData();
+      if (showingUp.totalOpens > 0) {
+        await sb.from("app_usage_stats").upsert({
+          ...showingUpToRow(showingUp, userId),
+        }, { onConflict: "user_id" });
+      }
+    } catch (err) {
+      console.warn("[migration] Showing up data failed:", err);
+      errors.push("showing up");
     }
 
     // Mark as migrated
     markMigrated();
-    console.log("[migration] ✅ Data migration complete!");
+    if (errors.length > 0) {
+      console.warn("[migration] Completed with errors in:", errors.join(", "));
+    }
+    console.log("[migration] Data migration complete!");
   } catch (err) {
-    console.error("[migration] ❌ Migration failed:", err);
+    console.error("[migration] Migration failed:", err);
     // Don't mark as migrated — will retry next time
     throw err;
   }
