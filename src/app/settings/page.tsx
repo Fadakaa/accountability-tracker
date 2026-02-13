@@ -426,7 +426,89 @@ function DataSyncSection() {
           {message}
         </div>
       )}
+
+      {/* Data Diagnostic */}
+      <LocalDataDiagnostic />
     </section>
+  );
+}
+
+/** Shows what data still exists in this browser's localStorage */
+function LocalDataDiagnostic() {
+  const [show, setShow] = useState(false);
+  const [info, setInfo] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!show || typeof window === "undefined") return;
+    const keys = [
+      "accountability-tracker",
+      "accountability-settings",
+      "accountability-admin",
+      "accountability-gym",
+      "accountability-gym-routines",
+      "accountability-showing-up",
+      "accountability-migrated",
+      "accountability-habit-id-map",
+    ];
+    const result: Record<string, string> = {};
+    for (const key of keys) {
+      const val = localStorage.getItem(key);
+      if (!val) {
+        result[key] = "EMPTY";
+      } else {
+        try {
+          const parsed = JSON.parse(val);
+          if (key === "accountability-tracker") {
+            const logs = parsed.logs?.length ?? 0;
+            const xp = parsed.totalXp ?? 0;
+            const level = parsed.currentLevel ?? 0;
+            const streakCount = Object.keys(parsed.streaks ?? {}).length;
+            result[key] = `${logs} logs, ${xp} XP, Lv${level}, ${streakCount} streaks`;
+          } else if (key === "accountability-admin") {
+            const count = Array.isArray(parsed) ? parsed.length : 0;
+            result[key] = `${count} tasks`;
+          } else if (key === "accountability-gym") {
+            const count = Array.isArray(parsed) ? parsed.length : 0;
+            result[key] = `${count} sessions`;
+          } else if (key === "accountability-gym-routines") {
+            const count = Array.isArray(parsed) ? parsed.length : 0;
+            result[key] = `${count} routines`;
+          } else if (key === "accountability-showing-up") {
+            result[key] = `${parsed.totalOpens ?? 0} opens, ${parsed.uniqueDays ?? 0} days`;
+          } else if (key === "accountability-settings") {
+            const customs = parsed.customHabits?.length ?? 0;
+            const overrides = Object.keys(parsed.habitOverrides ?? {}).length;
+            result[key] = `${customs} custom habits, ${overrides} overrides`;
+          } else {
+            result[key] = val.length > 50 ? val.slice(0, 50) + "..." : val;
+          }
+        } catch {
+          result[key] = val.length > 50 ? val.slice(0, 50) + "..." : val;
+        }
+      }
+    }
+    setInfo(result);
+  }, [show]);
+
+  return (
+    <div className="mt-4 border-t border-surface-700 pt-3">
+      <button
+        onClick={() => setShow(!show)}
+        className="text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors"
+      >
+        {show ? "Hide" : "Show"} local data diagnostic
+      </button>
+      {show && (
+        <div className="mt-2 space-y-1">
+          {Object.entries(info).map(([key, val]) => (
+            <div key={key} className="flex justify-between text-[10px]">
+              <span className="text-neutral-600 truncate mr-2">{key.replace("accountability-", "")}</span>
+              <span className={val === "EMPTY" ? "text-missed" : "text-done"}>{val}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
