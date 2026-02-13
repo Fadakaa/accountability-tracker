@@ -337,6 +337,9 @@ export function getTodayLog(state: LocalState): DayLog | undefined {
  * Counts consecutive days ending at today (or yesterday if today not logged yet)
  * where each habit was marked "done". This is the source of truth — never
  * relies on the stored streak counter which can drift from double-submissions.
+ *
+ * IMPORTANT: Walks backwards day-by-day (not just through logged dates) so that
+ * any day without a "done" entry breaks the streak — even if nothing was logged.
  */
 export function recalculateStreaks(state: LocalState, habitSlugsById: Record<string, string>): Record<string, number> {
   const today = getToday();
@@ -350,63 +353,47 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
     }
   }
 
-  // Sort logs by date descending
-  const sortedDates = state.logs
-    .map((l) => l.date)
-    .sort((a, b) => b.localeCompare(a));
-  const uniqueDates = [...new Set(sortedDates)];
+  // Build a date → log Map for O(1) lookups
+  const logByDate = new Map<string, (typeof state.logs)[0]>();
+  for (const log of state.logs) {
+    logByDate.set(log.date, log);
+  }
 
-  // For each habit, count consecutive days with "done" working backwards from today
   for (const habitId of allHabitIds) {
     const slug = habitSlugsById[habitId];
     if (!slug) continue;
 
     let streak = 0;
-    let expectedDate = today;
+    const todayLog = logByDate.get(today);
+    const todayEntry = todayLog?.entries[habitId];
+    let startDate: string;
 
-    for (const date of uniqueDates) {
-      // Skip future dates
-      if (date > today) continue;
-
-      // If this date is what we expect (consecutive day)
-      if (date === expectedDate) {
-        const log = state.logs.find((l) => l.date === date);
-        if (log?.entries[habitId]?.status === "done") {
-          streak++;
-          // Calculate the previous day
-          const d = new Date(date + "T12:00:00");
-          d.setDate(d.getDate() - 1);
-          expectedDate = d.toISOString().slice(0, 10);
-        } else {
-          break; // Chain broken
-        }
-      } else if (date < expectedDate) {
-        // We skipped a day — streak is broken
-        break;
-      }
+    if (todayEntry?.status === "done") {
+      // Today is done — start counting from today
+      startDate = today;
+    } else if (todayEntry) {
+      // Today has a non-done entry (missed / later) — streak is 0
+      streaks[slug] = 0;
+      continue;
+    } else {
+      // Today not logged yet — start counting from yesterday (grace period)
+      const d = new Date(today + "T12:00:00");
+      d.setDate(d.getDate() - 1);
+      startDate = d.toISOString().slice(0, 10);
     }
 
-    // If today isn't logged yet, try starting from yesterday
-    if (streak === 0 && !state.logs.find((l) => l.date === today)?.entries[habitId]) {
-      const yesterday = new Date(today + "T12:00:00");
-      yesterday.setDate(yesterday.getDate() - 1);
-      let expectedDateAlt = yesterday.toISOString().slice(0, 10);
+    // Walk backwards day-by-day from startDate
+    const cursor = new Date(startDate + "T12:00:00");
+    while (true) {
+      const dateStr = cursor.toISOString().slice(0, 10);
+      const log = logByDate.get(dateStr);
 
-      for (const date of uniqueDates) {
-        if (date > yesterday.toISOString().slice(0, 10)) continue;
-        if (date === expectedDateAlt) {
-          const log = state.logs.find((l) => l.date === date);
-          if (log?.entries[habitId]?.status === "done") {
-            streak++;
-            const d = new Date(date + "T12:00:00");
-            d.setDate(d.getDate() - 1);
-            expectedDateAlt = d.toISOString().slice(0, 10);
-          } else {
-            break;
-          }
-        } else if (date < expectedDateAlt) {
-          break;
-        }
+      if (log?.entries[habitId]?.status === "done") {
+        streak++;
+        cursor.setDate(cursor.getDate() - 1);
+      } else {
+        // No log, no entry for this habit, or entry isn't "done" — streak breaks
+        break;
       }
     }
 
