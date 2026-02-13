@@ -3,6 +3,7 @@
 
 import type { DayLog } from "./store";
 import type { Habit } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -101,7 +102,7 @@ export function getCompletionByDay(
   days: number = 90
 ): DayCompletion[] {
   const today = new Date();
-  const binaryHabits = habits.filter((h) => h.category === "binary" && h.is_active);
+  const binaryHabits = habits.filter((h) => isBinaryLike(h.category) && h.is_active);
   const result: DayCompletion[] = [];
 
   for (let i = days - 1; i >= 0; i--) {
@@ -251,7 +252,7 @@ export function getDayOfWeekAnalysis(
   logs: DayLog[],
   habits: Habit[]
 ): DayOfWeekAvg[] {
-  const binaryHabits = habits.filter((h) => h.category === "binary" && h.is_active);
+  const binaryHabits = habits.filter((h) => isBinaryLike(h.category) && h.is_active);
   const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const totals = Array(7).fill(0);
   const counts = Array(7).fill(0);
@@ -280,7 +281,7 @@ export function getStreakTimeline(
   logs: DayLog[],
   habits: Habit[]
 ): HabitStreakTimeline[] {
-  const binaryHabits = habits.filter((h) => h.category === "binary" && h.is_active);
+  const binaryHabits = habits.filter((h) => isBinaryLike(h.category) && h.is_active);
   const sortedLogs = [...logs].sort((a, b) => a.date.localeCompare(b.date));
 
   return binaryHabits.map((habit) => {

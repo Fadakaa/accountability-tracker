@@ -6,6 +6,7 @@ import type { DayLog } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel, XP_VALUES, getFlameIcon } from "@/lib/habits";
 import type { Habit, LogStatus } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 
 // ─── XP Recalculation ───────────────────────────────────────
 function recalculateDayXP(log: DayLog, habits: Habit[]): number {
@@ -45,7 +46,7 @@ function recalculateDayXP(log: DayLog, habits: Habit[]): number {
   }
 
   // Bare minimum bonus
-  const bareMinHabits = habits.filter((h) => h.is_bare_minimum && h.is_active && h.category === "binary");
+  const bareMinHabits = habits.filter((h) => h.is_bare_minimum && h.is_active && isBinaryLike(h.category));
   const allBareMinDone = bareMinHabits.every((h) => log.entries[h.id]?.status === "done");
   if (allBareMinDone && bareMinHabits.length > 0) {
     xp += XP_VALUES.ALL_BARE_MINIMUM;
@@ -56,7 +57,7 @@ function recalculateDayXP(log: DayLog, habits: Habit[]): number {
 
   // Perfect day
   const allBinaryDone = habits
-    .filter((h) => h.category === "binary" && h.is_active)
+    .filter((h) => isBinaryLike(h.category) && h.is_active)
     .every((h) => log.entries[h.id]?.status === "done");
   if (allBinaryDone && !anyBad && allBareMinDone) {
     xp += XP_VALUES.PERFECT_DAY;
@@ -163,7 +164,7 @@ export default function EditLogPage() {
     return state.logs.map((l) => l.date).sort().reverse();
   }, []);
 
-  const binaryHabits = habits.filter((h) => h.category === "binary" && h.is_active);
+  const binaryHabits = habits.filter((h) => isBinaryLike(h.category) && h.is_active);
   const measuredHabits = habits.filter((h) => h.category === "measured" && h.is_active);
   const badHabits = habits.filter((h) => h.category === "bad" && h.is_active);
 

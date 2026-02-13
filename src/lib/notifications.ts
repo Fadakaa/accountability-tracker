@@ -7,6 +7,7 @@ import { loadState, saveState, getToday, loadSettings } from "./store";
 import { getResolvedHabits } from "./resolvedHabits";
 import { isStackComplete as sharedIsStackComplete, areAllStacksComplete, getCheckinSchedule, getCurrentTime, STACK_ORDER } from "./schedule";
 import type { HabitStack } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 
 // ─── Types ──────────────────────────────────────────────────
 export interface EscalationTimer {
@@ -397,7 +398,7 @@ function tickEndOfDay(): void {
 
   // 11:00 PM warning — if day isn't fully logged (range check: 23:00-23:04)
   if (hour === 23 && minute <= 4 && notifState.last11pmWarning !== today) {
-    const allBinaryHabits = getResolvedHabits().filter((h) => h.category === "binary" && h.is_active);
+    const allBinaryHabits = getResolvedHabits().filter((h) => isBinaryLike(h.category) && h.is_active);
     const loggedCount = allBinaryHabits.filter(
       (h) => todayLog?.entries[h.id]?.status === "done" || todayLog?.entries[h.id]?.status === "missed"
     ).length;
@@ -430,7 +431,7 @@ function tickEndOfDay(): void {
   if (hour === 0 && minute <= 4 && notifState.lastMidnightMiss !== yesterdayCheckStr) {
     const yesterdayLog = state.logs.find((l) => l.date === yesterdayCheckStr);
 
-    const allHabits = getResolvedHabits().filter((h) => h.category === "binary" && h.is_active);
+    const allHabits = getResolvedHabits().filter((h) => isBinaryLike(h.category) && h.is_active);
     let missedCount = 0;
 
     for (const habit of allHabits) {

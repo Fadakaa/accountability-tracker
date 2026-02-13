@@ -17,6 +17,7 @@ import type { LocalState, DayLog, WrapReflection, AdminTask } from "@/lib/store"
 import { getHabitsWithHistory } from "@/lib/resolvedHabits";
 import { getFlameIcon, XP_VALUES } from "@/lib/habits";
 import type { Habit } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 import VoiceInput from "@/components/VoiceInput";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -267,7 +268,7 @@ function buildCards(
   const prevWeekLogs = getPrevWeekLogs(state);
   const habits = getHabitsWithHistory();
   const activeHabits = habits.filter((h) => h.is_active);
-  const binaryHabits = activeHabits.filter((h) => h.category === "binary");
+  const binaryHabits = activeHabits.filter((h) => isBinaryLike(h.category));
   const badHabits = activeHabits.filter((h) => h.category === "bad");
   const measuredHabits = activeHabits.filter((h) => h.category === "measured");
 

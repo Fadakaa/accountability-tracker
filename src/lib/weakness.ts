@@ -3,6 +3,7 @@
 
 import { getResolvedHabits } from "./resolvedHabits";
 import { loadState } from "./store";
+import { isBinaryLike } from "@/types/database";
 
 export interface WeakHabit {
   habitId: string;
@@ -22,7 +23,7 @@ export function getWeakHabits(windowDays: number = 7): WeakHabit[] {
 
   for (const habit of habits) {
     // Only check active binary habits
-    if (!habit.is_active || habit.category !== "binary") continue;
+    if (!habit.is_active || !isBinaryLike(habit.category)) continue;
 
     let completed = 0;
     let total = 0;

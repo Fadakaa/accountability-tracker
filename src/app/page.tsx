@@ -6,6 +6,7 @@ import type { LocalState, AdminTask } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
+import { isBinaryLike } from "@/types/database";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
 import { startNotificationScheduler, getNotificationPermission, syncScheduleToServiceWorker, syncCompletionToServiceWorker } from "@/lib/notifications";
@@ -60,7 +61,7 @@ export default function Home() {
   // Dynamic top streaks — bare minimum habits sorted by streak length
   const streaks = state?.streaks ?? {};
   const topStreaks = resolvedHabits
-    .filter((h) => h.is_active && h.category === "binary")
+    .filter((h) => h.is_active && isBinaryLike(h.category))
     .map((h) => ({ slug: h.slug, icon: h.icon || "🔥", label: h.name, days: streaks[h.slug] ?? 0 }))
     .sort((a, b) => b.days - a.days)
     .slice(0, 4);

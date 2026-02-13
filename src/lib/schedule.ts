@@ -5,6 +5,7 @@
 
 import type { HabitStack } from "@/types/database";
 import type { Habit } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 import type { DayLog } from "./store";
 import { loadSettings, getToday } from "./store";
 
@@ -111,7 +112,7 @@ export function isStackComplete(
 ): boolean {
   if (!todayLog) return false;
   const stackBinary = habits.filter(
-    (h) => h.stack === stack && h.category === "binary" && h.is_active
+    (h) => h.stack === stack && isBinaryLike(h.category) && h.is_active
   );
   if (stackBinary.length === 0) return false;
   return stackBinary.every((h) => {
@@ -140,7 +141,7 @@ export function isStackAnswered(
 ): boolean {
   if (!todayLog) return false;
   const stackBinary = habits.filter(
-    (h) => h.stack === stack && h.category === "binary" && h.is_active
+    (h) => h.stack === stack && isBinaryLike(h.category) && h.is_active
   );
   if (stackBinary.length === 0) return false;
   return stackBinary.every((h) => {

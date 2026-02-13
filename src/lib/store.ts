@@ -1,7 +1,7 @@
 // Local storage-based state — works offline before Supabase is connected
 // Stores check-in data, streaks, and XP on-device
 
-import type { LogStatus, SprintIntensity, TrainingType, HabitStack } from "@/types/database";
+import type { LogStatus, SprintIntensity, TrainingType, HabitStack, Habit } from "@/types/database";
 
 const STORAGE_KEY = "accountability-tracker";
 const GYM_STORAGE_KEY = "accountability-gym";
@@ -564,6 +564,7 @@ export interface UserSettings {
   customQuotes: { id: string; text: string; category: string; isDefault: false }[];
   hiddenQuoteIds: string[];
   routineChains: Record<HabitStack, ChainItem[]>;
+  customHabits: Habit[];
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -582,6 +583,7 @@ const DEFAULT_SETTINGS: UserSettings = {
     midday: [],
     evening: [],
   },
+  customHabits: [],
 };
 
 export function loadSettings(): UserSettings {

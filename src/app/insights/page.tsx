@@ -18,6 +18,7 @@ import {
   getSingleHabitStats,
 } from "@/lib/analytics";
 import type { Habit } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 import type { ResolvedHabit } from "@/lib/resolvedHabits";
 
 import HeatMap from "@/components/charts/HeatMap";
@@ -509,7 +510,7 @@ function HabitFilter({
   const [expanded, setExpanded] = useState(false);
 
   // Group by category for display
-  const binary = habits.filter((h) => h.category === "binary");
+  const binary = habits.filter((h) => isBinaryLike(h.category));
   const measured = habits.filter((h) => h.category === "measured");
   const bad = habits.filter((h) => h.category === "bad");
 

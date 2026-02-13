@@ -5,6 +5,7 @@
 
 import type { DayLog } from "./store";
 import type { Habit } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 
 // ─── Done Counting ─────────────────────────────────────────
 
@@ -40,7 +41,7 @@ export function getDailyCompletionStats(
   habits: Habit[]
 ): DailyCompletionStats {
   const bareMinHabits = habits.filter((h) => h.is_bare_minimum && h.is_active);
-  const stretchHabits = habits.filter((h) => h.category === "binary" && !h.is_bare_minimum && h.is_active);
+  const stretchHabits = habits.filter((h) => isBinaryLike(h.category) && !h.is_bare_minimum && h.is_active);
   const measuredHabits = habits.filter((h) => h.category === "measured" && h.is_active);
 
   let bareMinDone = 0;

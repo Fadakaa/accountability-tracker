@@ -8,6 +8,7 @@ import type { Habit, HabitStack } from "@/types/database";
 /** Extended habit type that marks whether a habit has been retired (deactivated but has history) */
 export interface ResolvedHabit extends Habit {
   isRetired: boolean;
+  isDefault: boolean;
 }
 
 /**
@@ -16,7 +17,15 @@ export interface ResolvedHabit extends Habit {
  */
 export function getResolvedHabits(includeInactive = false): ResolvedHabit[] {
   const settings = loadSettings();
-  const all = HABITS.map((habit) => {
+  const customHabits = settings.customHabits ?? [];
+
+  // Merge static defaults + user-created custom habits
+  const allSource: { habit: Habit; isDefault: boolean }[] = [
+    ...HABITS.map((h) => ({ habit: h, isDefault: true })),
+    ...customHabits.map((h) => ({ habit: h, isDefault: false })),
+  ];
+
+  const all = allSource.map(({ habit, isDefault }) => {
     const override = settings.habitOverrides[habit.id];
     const resolved: ResolvedHabit = {
       ...habit,
@@ -26,6 +35,7 @@ export function getResolvedHabits(includeInactive = false): ResolvedHabit[] {
       current_level: override?.current_level ?? habit.current_level,
       sort_order: override?.sort_order ?? habit.sort_order,
       isRetired: false,
+      isDefault,
     };
     // Mark as retired if it was deactivated
     if (!resolved.is_active) {

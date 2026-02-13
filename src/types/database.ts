@@ -1,7 +1,12 @@
 // Supabase database types — will be auto-generated later via `supabase gen types`
 // For now, manual type definitions matching our schema
 
-export type HabitCategory = "binary" | "measured" | "bad";
+export type HabitCategory = "binary" | "measured" | "bad" | "manual-skill";
+
+/** Categories that behave like binary in check-in (Done/Miss/Later) */
+export function isBinaryLike(category: HabitCategory): boolean {
+  return category === "binary" || category === "manual-skill";
+}
 export type HabitStack = "morning" | "midday" | "evening";
 export type LogStatus = "done" | "missed" | "later" | "skipped";
 export type SprintIntensity = "moderate" | "intense" | "critical";

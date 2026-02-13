@@ -7,10 +7,12 @@ import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel } from "@/lib/habits";
-import type { Habit, HabitStack } from "@/types/database";
+import type { Habit, HabitStack, HabitCategory } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 import { syncScheduleToServiceWorker } from "@/lib/notifications";
 import { apiUrl } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
+import { createHabit, updateCustomHabit, deleteCustomHabit, isDefaultHabit, type CreateHabitInput } from "@/lib/habitCrud";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -86,9 +88,15 @@ export default function SettingsPage() {
       customQuotes: [],
       hiddenQuoteIds: [],
       routineChains: { morning: [], midday: [], evening: [] },
+      customHabits: settings?.customHabits ?? [], // Preserve custom habits on settings reset
     };
     setSettings(newSettings);
     saveSettings(newSettings);
+    setHabits(getResolvedHabits());
+  }
+
+  function refreshHabits() {
+    setSettings(loadSettings());
     setHabits(getResolvedHabits());
   }
 
@@ -138,8 +146,11 @@ export default function SettingsPage() {
           Habits by Stack
         </h2>
         <p className="text-xs text-neutral-600 mb-4">
-          Move habits between stacks, toggle bare minimum status, or deactivate
+          Move habits between stacks, toggle bare minimum status, or archive
         </p>
+
+        {/* Create Habit Button */}
+        <CreateHabitForm onCreated={refreshHabits} />
 
         {STACKS.map((stack) => (
           <div key={stack.key} className="mb-6">
@@ -156,7 +167,6 @@ export default function SettingsPage() {
                     isFirst={idx === 0}
                     isLast={idx === byStack[stack.key].length - 1}
                     onStackChange={(newStack) => {
-                      // Move to end of target stack
                       const targetHabits = habits.filter((h) => h.stack === newStack && h.is_active);
                       const maxOrder = targetHabits.reduce((max, h) => Math.max(max, h.sort_order), 0);
                       updateHabit(habit.id, { stack: newStack, sort_order: maxOrder + 1 });
@@ -164,11 +174,15 @@ export default function SettingsPage() {
                     onBareMinToggle={() => {
                       updateHabit(habit.id, { is_bare_minimum: !habit.is_bare_minimum });
                     }}
-                    onDeactivate={() => {
+                    onArchive={() => {
                       updateHabit(habit.id, { is_active: false });
                     }}
                     onMoveUp={() => moveHabit(habit, "up")}
                     onMoveDown={() => moveHabit(habit, "down")}
+                    onEditCustom={(updates) => {
+                      updateCustomHabit(habit.id, updates);
+                      refreshHabits();
+                    }}
                   />
                 ))}
               {byStack[stack.key].length === 0 && (
@@ -181,11 +195,11 @@ export default function SettingsPage() {
         ))}
       </section>
 
-      {/* Inactive Habits */}
+      {/* Archived Habits */}
       {inactiveHabits.length > 0 && (
         <section className="mb-6">
           <h2 className="text-xs font-bold text-neutral-600 uppercase tracking-wider mb-3">
-            Inactive Habits
+            Archived Habits
           </h2>
           <div className="space-y-2">
             {inactiveHabits.map((habit) => (
@@ -196,13 +210,27 @@ export default function SettingsPage() {
                 <span className="flex items-center gap-2 text-sm text-neutral-500">
                   <span>{habit.icon}</span>
                   <span>{habit.name}</span>
+                  {isDefaultHabit(habit.id) && (
+                    <span className="text-[9px] bg-surface-700 text-neutral-600 px-1.5 py-0.5 rounded-full uppercase font-bold">
+                      Default
+                    </span>
+                  )}
                 </span>
-                <button
-                  onClick={() => updateHabit(habit.id, { is_active: true })}
-                  className="text-xs text-brand hover:text-brand-dark font-medium transition-colors"
-                >
-                  Reactivate
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { updateHabit(habit.id, { is_active: true }); }}
+                    className="text-xs text-brand hover:text-brand-dark font-medium transition-colors"
+                  >
+                    Restore
+                  </button>
+                  {!isDefaultHabit(habit.id) && (
+                    <DeleteHabitButton
+                      habitId={habit.id}
+                      habitName={habit.name}
+                      onDeleted={refreshHabits}
+                    />
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -236,6 +264,213 @@ export default function SettingsPage() {
   );
 }
 
+// ─── Create Habit Form ──────────────────────────────────────
+function CreateHabitForm({ onCreated }: { onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [icon, setIcon] = useState("");
+  const [category, setCategory] = useState<HabitCategory>("binary");
+  const [stack, setStack] = useState<HabitStack>("morning");
+  const [unit, setUnit] = useState<string | null>(null);
+  const [bareMin, setBareMin] = useState(false);
+
+  function handleSubmit() {
+    if (!name.trim()) return;
+    createHabit({
+      name: name.trim(),
+      icon: icon || "✨",
+      category,
+      stack,
+      is_bare_minimum: isBinaryLike(category) ? bareMin : false,
+      unit: category === "measured" ? (unit || "count") : null,
+    });
+    // Reset form
+    setName("");
+    setIcon("");
+    setCategory("binary");
+    setStack("morning");
+    setUnit(null);
+    setBareMin(false);
+    setOpen(false);
+    onCreated();
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full rounded-xl border border-dashed border-brand/30 py-3 text-sm text-brand hover:bg-brand/5 hover:border-brand/50 transition-colors mb-6"
+      >
+        ➕ Create Custom Habit
+      </button>
+    );
+  }
+
+  const TYPES: { key: HabitCategory; label: string; emoji: string }[] = [
+    { key: "binary", label: "Binary", emoji: "✅" },
+    { key: "measured", label: "Measured", emoji: "📊" },
+    { key: "bad", label: "Bad Habit", emoji: "💀" },
+    { key: "manual-skill", label: "Skill", emoji: "🌳" },
+  ];
+
+  const UNITS = [
+    { value: "count", label: "Count" },
+    { value: "minutes", label: "Minutes" },
+    { value: "1-5", label: "1–5 Scale" },
+    { value: "1-10", label: "1–10 Scale" },
+  ];
+
+  return (
+    <div className="rounded-xl bg-surface-800 border border-brand/30 p-4 mb-6 space-y-4">
+      <h3 className="text-xs font-bold text-brand uppercase tracking-wider">New Habit</h3>
+
+      {/* Name + Icon */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={icon}
+          onChange={(e) => setIcon(e.target.value)}
+          placeholder="😊"
+          maxLength={2}
+          className="w-12 rounded-lg bg-surface-700 border border-surface-600 px-2 py-2.5 text-center text-lg
+                     focus:outline-none focus:ring-2 focus:ring-brand/50"
+        />
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Habit name..."
+          className="flex-1 rounded-lg bg-surface-700 border border-surface-600 px-3 py-2.5 text-sm text-white
+                     placeholder-neutral-600 focus:outline-none focus:ring-2 focus:ring-brand/50"
+        />
+      </div>
+
+      {/* Type */}
+      <div>
+        <label className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1.5 block">Type</label>
+        <div className="grid grid-cols-4 gap-1.5">
+          {TYPES.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setCategory(t.key); if (t.key !== "measured") setUnit(null); }}
+              className={`rounded-lg py-2 text-[10px] font-bold transition-colors ${
+                category === t.key
+                  ? "bg-brand text-white"
+                  : "bg-surface-700 text-neutral-500 hover:text-neutral-300"
+              }`}
+            >
+              {t.emoji} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Unit (for measured only) */}
+      {category === "measured" && (
+        <div>
+          <label className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1.5 block">Unit</label>
+          <div className="grid grid-cols-4 gap-1.5">
+            {UNITS.map((u) => (
+              <button
+                key={u.value}
+                onClick={() => setUnit(u.value)}
+                className={`rounded-lg py-2 text-[10px] font-bold transition-colors ${
+                  unit === u.value
+                    ? "bg-brand text-white"
+                    : "bg-surface-700 text-neutral-500 hover:text-neutral-300"
+                }`}
+              >
+                {u.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stack */}
+      <div>
+        <label className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1.5 block">Stack</label>
+        <div className="flex gap-1.5">
+          {STACKS.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setStack(s.key)}
+              className={`flex-1 rounded-lg py-2 text-xs font-bold transition-colors ${
+                stack === s.key
+                  ? "bg-brand text-white"
+                  : "bg-surface-700 text-neutral-500 hover:text-neutral-300"
+              }`}
+            >
+              {s.icon} {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Bare Minimum toggle */}
+      {isBinaryLike(category) && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-neutral-400">Non-negotiable (bare minimum)</span>
+          <button
+            onClick={() => setBareMin(!bareMin)}
+            className={`w-10 h-5 rounded-full transition-colors relative ${
+              bareMin ? "bg-brand" : "bg-surface-600"
+            }`}
+          >
+            <div
+              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
+                bareMin ? "left-5" : "left-0.5"
+              }`}
+            />
+          </button>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={!name.trim()}
+          className="flex-1 rounded-lg py-2.5 text-sm font-bold bg-brand text-white disabled:opacity-40 active:scale-95 transition-all"
+        >
+          Create Habit
+        </button>
+        <button
+          onClick={() => { setOpen(false); setName(""); setIcon(""); }}
+          className="flex-1 rounded-lg py-2.5 text-sm font-medium bg-surface-700 text-neutral-400 active:scale-95 transition-all"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Delete Habit Button (with confirmation) ─────────────────
+function DeleteHabitButton({ habitId, habitName, onDeleted }: { habitId: string; habitName: string; onDeleted: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <button
+        onClick={() => { deleteCustomHabit(habitId); onDeleted(); }}
+        className="text-xs text-missed font-bold hover:text-missed/80 transition-colors"
+      >
+        Confirm delete
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="text-xs text-neutral-600 hover:text-missed transition-colors"
+    >
+      Delete
+    </button>
+  );
+}
+
 // ─── Habit Settings Row ─────────────────────────────────────
 function HabitSettingsRow({
   habit,
@@ -243,21 +478,26 @@ function HabitSettingsRow({
   isLast,
   onStackChange,
   onBareMinToggle,
-  onDeactivate,
+  onArchive,
   onMoveUp,
   onMoveDown,
+  onEditCustom,
 }: {
   habit: Habit;
   isFirst: boolean;
   isLast: boolean;
   onStackChange: (stack: HabitStack) => void;
   onBareMinToggle: () => void;
-  onDeactivate: () => void;
+  onArchive: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onEditCustom: (updates: Partial<Pick<Habit, "name" | "icon">>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editName, setEditName] = useState(habit.name);
+  const [editIcon, setEditIcon] = useState(habit.icon || "");
   const level = getHabitLevel(habit.id, habit.current_level);
+  const isCustom = !isDefaultHabit(habit.id);
 
   return (
     <div className="rounded-xl bg-surface-800 border border-surface-700 overflow-hidden">
@@ -268,11 +508,16 @@ function HabitSettingsRow({
       >
         <div className="flex items-center gap-2">
           <span className="text-lg">{habit.icon}</span>
-          <div>
+          <div className="flex items-center gap-2">
             <span className="text-sm font-semibold">{habit.name}</span>
             {level && (
-              <span className="text-xs text-neutral-500 ml-2">
+              <span className="text-xs text-neutral-500">
                 Lv.{habit.current_level}
+              </span>
+            )}
+            {isCustom && (
+              <span className="text-[9px] bg-brand/20 text-brand px-1.5 py-0.5 rounded-full uppercase font-bold">
+                Custom
               </span>
             )}
           </div>
@@ -290,6 +535,43 @@ function HabitSettingsRow({
       {/* Expanded controls */}
       {expanded && (
         <div className="px-4 pb-4 border-t border-surface-700 pt-3 space-y-3">
+          {/* Edit name/icon (custom habits only) */}
+          {isCustom && (
+            <div>
+              <label className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1 block">
+                Name & Icon
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={editIcon}
+                  onChange={(e) => setEditIcon(e.target.value)}
+                  maxLength={2}
+                  className="w-12 rounded-lg bg-surface-700 border border-surface-600 px-2 py-2 text-center text-lg
+                             focus:outline-none focus:ring-2 focus:ring-brand/50"
+                />
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="flex-1 rounded-lg bg-surface-700 border border-surface-600 px-3 py-2 text-sm text-white
+                             focus:outline-none focus:ring-2 focus:ring-brand/50"
+                />
+                <button
+                  onClick={() => {
+                    if (editName.trim() && (editName !== habit.name || editIcon !== (habit.icon || ""))) {
+                      onEditCustom({ name: editName.trim(), icon: editIcon || null });
+                    }
+                  }}
+                  disabled={!editName.trim() || (editName === habit.name && editIcon === (habit.icon || ""))}
+                  className="rounded-lg bg-done/20 text-done px-3 py-2 text-xs font-bold disabled:opacity-30 transition-all"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Stack selector */}
           <div>
             <label className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1 block">
@@ -313,7 +595,7 @@ function HabitSettingsRow({
           </div>
 
           {/* Bare minimum toggle */}
-          {habit.category === "binary" && (
+          {isBinaryLike(habit.category) && (
             <div className="flex items-center justify-between">
               <span className="text-xs text-neutral-400">Non-negotiable (bare minimum)</span>
               <button
@@ -360,12 +642,12 @@ function HabitSettingsRow({
             </div>
           </div>
 
-          {/* Deactivate */}
+          {/* Archive */}
           <button
-            onClick={onDeactivate}
+            onClick={onArchive}
             className="w-full rounded-lg border border-missed/30 py-2 text-xs text-missed hover:bg-missed/10 transition-colors"
           >
-            Deactivate Habit
+            Archive Habit
           </button>
         </div>
       )}

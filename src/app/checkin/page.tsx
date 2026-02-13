@@ -10,6 +10,7 @@ import { startEscalation, resolveEscalation, syncCompletionToServiceWorker } fro
 import { apiUrl } from "@/lib/api";
 import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
+import { isBinaryLike } from "@/types/database";
 import { getCurrentStack, getGreeting, getGreetingEmoji, getLaterStacks, STACK_ORDER, isStackAnswered, areAllStacksAnswered } from "@/lib/schedule";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -133,7 +134,7 @@ export default function CheckinPage() {
 
     const stackHabits = getResolvedHabitsByChainOrder(stack);
     // Exclude habits that have been deferred to a later stack
-    const stackBinary = stackHabits.filter((h) => h.category === "binary" && h.is_active && !isDeferredAway(h.id));
+    const stackBinary = stackHabits.filter((h) => isBinaryLike(h.category) && h.is_active && !isDeferredAway(h.id));
     const stackBad = stackHabits.filter((h) => h.category === "bad" && h.is_active);
     const stackMeasured = stackHabits.filter((h) => h.category === "measured" && h.is_active);
 
@@ -196,7 +197,7 @@ export default function CheckinPage() {
 
   // Split into categories — for intense/critical, separate bare minimum from extras
   // Also filter out habits that have been deferred to a later stack
-  const allBinary = stackHabits.filter((h) => h.category === "binary" && !isDeferredAway(h.id));
+  const allBinary = stackHabits.filter((h) => isBinaryLike(h.category) && !isDeferredAway(h.id));
   const allMeasured = stackHabits.filter((h) => h.category === "measured" && h.id !== ADMIN_HABIT_ID);
   const badHabits = stackHabits.filter((h) => h.category === "bad");
 

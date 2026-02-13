@@ -6,6 +6,7 @@ import { getResolvedHabits } from "./resolvedHabits";
 import { loadState, saveState, loadSettings, saveSettings } from "./store";
 import { HABIT_LEVELS, XP_VALUES } from "./habits";
 import type { DayLog } from "./store";
+import { isBinaryLike } from "@/types/database";
 
 export interface LevelSuggestion {
   habitId: string;
@@ -27,7 +28,7 @@ export function evaluateLevelSuggestions(): LevelSuggestion[] {
   for (const habit of habits) {
     // Check both binary AND measured habits that have levels defined
     if (!habit.is_active) continue;
-    if (habit.category !== "binary" && habit.category !== "measured") continue;
+    if (!isBinaryLike(habit.category) && habit.category !== "measured") continue;
     const hasLevels = HABIT_LEVELS.some((hl) => hl.habit_id === habit.id);
     if (!hasLevels) continue;
 
