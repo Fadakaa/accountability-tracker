@@ -132,7 +132,33 @@ export async function migrateLocalStorageToSupabase(userId: string): Promise<voi
       const stored = typeof window !== "undefined"
         ? localStorage.getItem("accountability-habit-id-map")
         : null;
-      if (stored) idMap = JSON.parse(stored);
+      if (stored) {
+        idMap = JSON.parse(stored);
+      } else {
+        // ID map was lost (e.g., after logout/login cycle).
+        // Rebuild it by matching Supabase habits (new IDs) to HABITS (old IDs) by slug.
+        console.log("[migration] Rebuilding habit ID map from Supabase...");
+        const { data: dbHabits } = await sb
+          .from("habits")
+          .select("id,slug")
+          .eq("user_id", userId);
+        if (dbHabits && dbHabits.length > 0) {
+          const slugToNewId: Record<string, string> = {};
+          for (const h of dbHabits) {
+            slugToNewId[h.slug] = h.id;
+          }
+          for (const h of HABITS) {
+            if (slugToNewId[h.slug]) {
+              idMap[h.id] = slugToNewId[h.slug];
+            }
+          }
+          // Re-save the map so we don't have to rebuild next time
+          if (typeof window !== "undefined") {
+            localStorage.setItem("accountability-habit-id-map", JSON.stringify(idMap));
+          }
+          console.log("[migration] Rebuilt ID map for", Object.keys(idMap).length, "habits");
+        }
+      }
     }
     const remapId = (oldId: string) => idMap[oldId] ?? oldId;
 

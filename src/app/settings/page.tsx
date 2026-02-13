@@ -292,6 +292,24 @@ function DataSyncSection() {
 
   async function handleUpload() {
     if (!user) { setMessage("Sign in first"); return; }
+
+    // Check if there's actually data to upload
+    const localRaw = typeof window !== "undefined" ? localStorage.getItem("accountability-tracker") : null;
+    if (localRaw) {
+      try {
+        const parsed = JSON.parse(localRaw);
+        if (!parsed.logs || parsed.logs.length === 0) {
+          setStatus("error");
+          setMessage("No check-in data on this device to upload. Use Download to pull from cloud instead.");
+          return;
+        }
+      } catch { /* proceed anyway */ }
+    } else {
+      setStatus("error");
+      setMessage("No data found on this device. Use Download to pull from cloud instead.");
+      return;
+    }
+
     setStatus("uploading");
     setMessage("");
     try {
@@ -302,12 +320,13 @@ function DataSyncSection() {
       await migrateLocalStorageToSupabase(user.id);
       setStatus("success");
       setMigrated(true);
-      setMessage("This device's data has been uploaded to the cloud");
+      setMessage("This device's data has been uploaded to the cloud!");
       setTimeout(() => setStatus("idle"), 4000);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("[sync] Upload failed:", err);
       setStatus("error");
-      setMessage("Upload failed — check console for details");
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessage(`Upload failed: ${msg}`);
     }
   }
 
@@ -324,7 +343,7 @@ function DataSyncSection() {
 
       // Write to localStorage
       if (typeof window !== "undefined") {
-        localStorage.setItem("accountability-state", JSON.stringify(cloudState));
+        localStorage.setItem("accountability-tracker", JSON.stringify(cloudState));
         localStorage.setItem("accountability-settings", JSON.stringify(cloudSettings));
         // Mark as migrated so it doesn't try to re-upload
         localStorage.setItem("accountability-migrated", "true");

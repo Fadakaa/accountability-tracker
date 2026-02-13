@@ -157,9 +157,23 @@ export async function loadStateFromDB(): Promise<LocalState> {
       lastWrapDate,
     }, habitIdToSlug);
 
-    // Cache in localStorage for offline fallback
-    saveState(state);
+    // Safety: only cache in localStorage if Supabase actually has data.
+    // If Supabase is empty (upload never completed), preserve existing localStorage.
+    const localState = loadState();
+    const supabaseHasData = dailyLogs.length > 0 || (userXp?.total_xp ?? 0) > 0;
+    const localHasData = localState.logs.length > 0 || localState.totalXp > 0;
 
+    if (supabaseHasData) {
+      // Supabase has real data — cache it locally
+      saveState(state);
+      return state;
+    } else if (localHasData) {
+      // Supabase is empty but localStorage has data — keep local, don't overwrite
+      console.warn("[db] Supabase is empty but localStorage has data — keeping local data");
+      return localState;
+    }
+
+    // Both empty — just return the (empty) Supabase state
     return state;
   } catch (err) {
     console.warn("[db] Failed to load from Supabase, falling back to localStorage:", err);
