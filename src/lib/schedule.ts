@@ -72,28 +72,34 @@ export function getCurrentTime(): string {
 }
 
 // ─── Next Check-in ─────────────────────────────────────────
-/** Returns the next upcoming check-in time as a formatted string */
+/** Returns the next upcoming notification time as a formatted string.
+ *  Uses ALL enabled notification slots (not just the 3 stack times)
+ *  so the dashboard matches what the user configured in Settings. */
 export function getNextCheckinDisplay(): string {
-  const schedule = getCheckinSchedule();
+  const settings = loadSettings();
+  const slots = (settings.notificationSlots ?? [])
+    .filter((s: { enabled: boolean }) => s.enabled)
+    .sort((a: { ukHour: number; ukMinute: number }, b: { ukHour: number; ukMinute: number }) =>
+      a.ukHour * 60 + a.ukMinute - (b.ukHour * 60 + b.ukMinute)
+    );
+
+  if (slots.length === 0) return "";
+
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-  const times = [
-    { time: schedule.morning },
-    { time: schedule.midday },
-    { time: schedule.evening },
-  ];
-
-  for (const ct of times) {
-    const [h, m] = ct.time.split(":").map(Number);
-    const mins = h * 60 + m;
-    if (mins > currentMinutes) {
-      return formatTime24to12(ct.time);
+  for (const slot of slots) {
+    const slotMinutes = slot.ukHour * 60 + slot.ukMinute;
+    if (slotMinutes > currentMinutes) {
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return formatTime24to12(`${pad(slot.ukHour)}:${pad(slot.ukMinute)}`);
     }
   }
 
-  // All check-ins passed — show tomorrow's first check-in
-  return `${formatTime24to12(schedule.morning)} tomorrow`;
+  // All slots passed — show tomorrow's first slot
+  const first = slots[0];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${formatTime24to12(`${pad(first.ukHour)}:${pad(first.ukMinute)}`)} tomorrow`;
 }
 
 // ─── Stack Completion ──────────────────────────────────────
