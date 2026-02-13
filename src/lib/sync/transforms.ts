@@ -45,7 +45,7 @@ export function dayLogToRows(dayLog: DayLog, userId: string): DayLogRows {
       status: entry.status,
       value: entry.value,
       notes: null,
-      logged_at: dayLog.submittedAt,
+      logged_at: dayLog.submittedAt || new Date().toISOString(),
     });
   }
 
@@ -58,7 +58,7 @@ export function dayLogToRows(dayLog: DayLog, userId: string): DayLogRows {
       occurred: entry.occurred,
       duration_minutes: entry.durationMinutes,
       notes: null,
-      logged_at: dayLog.submittedAt,
+      logged_at: dayLog.submittedAt || new Date().toISOString(),
     });
   }
 
@@ -236,7 +236,7 @@ export function gymSessionToRows(session: GymSessionLocal, userId: string) {
       rpe: session.rpe,
       notes: session.notes || null,
       just_walked_in: session.justWalkedIn,
-      created_at: session.createdAt,
+      created_at: session.createdAt || new Date().toISOString(),
     },
     exercises: session.exercises.map((ex, i) => ({
       id: ex.id,
@@ -265,8 +265,8 @@ export function gymRoutineToRows(routine: GymRoutine, userId: string) {
       name: routine.name,
       training_type: routine.trainingType,
       muscle_group: routine.muscleGroup,
-      created_at: routine.createdAt,
-      updated_at: routine.updatedAt,
+      created_at: routine.createdAt || new Date().toISOString(),
+      updated_at: routine.updatedAt || new Date().toISOString(),
     },
     exercises: routine.exercises.map((ex, i) => ({
       id: crypto.randomUUID(),
@@ -289,8 +289,8 @@ export function adminTaskToRow(task: AdminTask, userId: string) {
     task_date: task.date || null,
     source: task.source,
     in_backlog: task.inBacklog,
-    completed_at: task.completedAt,
-    created_at: task.createdAt,
+    completed_at: task.completedAt || null,
+    created_at: task.createdAt || new Date().toISOString(),
   };
 }
 

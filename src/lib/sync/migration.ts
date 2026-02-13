@@ -156,6 +156,12 @@ export async function migrateLocalStorageToSupabase(
     }
     report("Check auth session", "done", `Signed in as ${session.user.email}`);
 
+    // Verify the userId matches the session (RLS will reject mismatches)
+    if (userId !== session.user.id) {
+      report("Check auth session", "error", `userId mismatch: param=${userId.slice(0, 8)}… vs session=${session.user.id.slice(0, 8)}…`);
+      throw new Error(`userId mismatch — param: ${userId} vs session: ${session.user.id}`);
+    }
+
     // ── Step 1: Ensure user_profile exists ──────────────
     report("Create user profile", "running");
     const { error: profileError } = await sb.from("user_profile").upsert(
@@ -400,7 +406,10 @@ export async function migrateLocalStorageToSupabase(
             const { error: eErr } = await sb.from("gym_exercises").upsert(exRow, { onConflict: "id" });
             if (eErr) throw new Error(`gym_exercises: ${eErr.message}`);
             if (sets.length > 0) {
-              const { error: setErr } = await sb.from("gym_sets").upsert(sets, { onConflict: "id" });
+              // Delete existing sets for this exercise to avoid duplicates on re-run
+              // (gym_sets.id is a new random UUID each time, so upsert never matches)
+              await sb.from("gym_sets").delete().eq("exercise_id", ex.id);
+              const { error: setErr } = await sb.from("gym_sets").insert(sets);
               if (setErr) throw new Error(`gym_sets: ${setErr.message}`);
             }
           }
@@ -425,11 +434,11 @@ export async function migrateLocalStorageToSupabase(
           const { error: rErr } = await sb.from("gym_routines").upsert(routineRow, { onConflict: "id" });
           if (rErr) throw new Error(`gym_routines: ${rErr.message}`);
           if (exercises.length > 0) {
-            // Use upsert with individual inserts to avoid duplicate errors on re-run
-            for (const ex of exercises) {
-              const { error: exErr } = await sb.from("gym_routine_exercises").upsert(ex, { onConflict: "id" });
-              if (exErr) throw new Error(`gym_routine_exercises: ${exErr.message}`);
-            }
+            // Delete existing routine exercises to avoid duplicates on re-run
+            // (gym_routine_exercises.id is a new random UUID each time)
+            await sb.from("gym_routine_exercises").delete().eq("routine_id", routine.id);
+            const { error: exErr } = await sb.from("gym_routine_exercises").insert(exercises);
+            if (exErr) throw new Error(`gym_routine_exercises: ${exErr.message}`);
           }
         }
         report("Upload gym routines", "done", `${gymRoutines.length} routines`);
