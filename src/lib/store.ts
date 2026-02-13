@@ -378,22 +378,24 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
       streaks[slug] = 0;
       continue;
     } else {
-      // Today not logged yet OR "later" (deferred) — grace period,
+      // Today not logged, "later" (deferred), or no entry — grace period,
       // start counting from yesterday since the day isn't over yet
       const d = new Date(today + "T12:00:00");
       d.setDate(d.getDate() - 1);
       startDate = d.toISOString().slice(0, 10);
     }
 
-    // Walk backwards day-by-day from startDate
+    // Walk backwards day-by-day from startDate (max 365 days safety)
     const cursor = new Date(startDate + "T12:00:00");
-    while (true) {
+    let steps = 0;
+    while (steps < 365) {
       const dateStr = cursor.toISOString().slice(0, 10);
       const log = logByDate.get(dateStr);
 
       if (log?.entries[habitId]?.status === "done") {
         streak++;
         cursor.setDate(cursor.getDate() - 1);
+        steps++;
       } else {
         // No log, no entry for this habit, or entry isn't "done" — streak breaks
         break;
