@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { ClientProviders } from "@/components/ClientProviders";
 
 export const metadata: Metadata = {
   title: "Accountability Tracker",
@@ -38,7 +39,9 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         <ServiceWorkerRegistration />
-        <main className="min-h-screen">{children}</main>
+        <ClientProviders>
+          <main className="min-h-screen">{children}</main>
+        </ClientProviders>
       </body>
     </html>
   );

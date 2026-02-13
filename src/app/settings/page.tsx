@@ -10,6 +10,7 @@ import { getHabitLevel } from "@/lib/habits";
 import type { Habit, HabitStack } from "@/types/database";
 import { syncScheduleToServiceWorker } from "@/lib/notifications";
 import { apiUrl } from "@/lib/api";
+import { useAuth } from "@/components/AuthProvider";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -18,6 +19,7 @@ const STACKS: { key: HabitStack; label: string; icon: string }[] = [
 ];
 
 export default function SettingsPage() {
+  const { user, signOut } = useAuth();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [habits, setHabits] = useState<Habit[]>([]);
 
@@ -99,6 +101,33 @@ export default function SettingsPage() {
         </a>
         <h1 className="text-xl font-bold mt-1">⚙️ Settings</h1>
       </header>
+
+      {/* Account */}
+      <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+        <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+          Account
+        </h2>
+        <div className="flex items-center justify-between">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-neutral-300 truncate">
+              {user?.email ?? "Not signed in"}
+            </p>
+            <p className="text-[10px] text-neutral-600 mt-0.5">
+              Signed in via email
+            </p>
+          </div>
+          <button
+            onClick={async () => {
+              await signOut();
+              window.location.href = "/login";
+            }}
+            className="ml-4 rounded-lg bg-surface-700 hover:bg-surface-600 px-4 py-2 text-xs
+                       text-neutral-400 hover:text-white transition-colors flex-shrink-0"
+          >
+            Sign Out
+          </button>
+        </div>
+      </section>
 
       {/* Notifications & Schedule (unified) */}
       <NotificationSection />
