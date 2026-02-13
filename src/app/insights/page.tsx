@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { loadState, loadGymSessions, getLevelForXP } from "@/lib/store";
-import type { LocalState, GymSessionLocal } from "@/lib/store";
+import { useDB } from "@/hooks/useDB";
+import { getLevelForXP } from "@/lib/store";
+import type { GymSessionLocal } from "@/lib/store";
 import { getHabitsWithHistory } from "@/lib/resolvedHabits";
+import { loadGymSessionsFromDB } from "@/lib/db";
 import {
   getCompletionByDay,
   getWeeklyGameData,
@@ -41,24 +43,26 @@ function daysForRange(range: TimeRange): number {
 
 // ─── Component ──────────────────────────────────────────────
 export default function InsightsPage() {
-  const [state, setState] = useState<LocalState | null>(null);
+  const { state, dbHabits, loading } = useDB();
   const [gymSessions, setGymSessions] = useState<GymSessionLocal[]>([]);
-  const [habits, setHabits] = useState<Habit[]>([]);
   const [range, setRange] = useState<TimeRange>("30d");
   const [selectedDay, setSelectedDay] = useState<{ date: string; count: number } | null>(null);
   const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
 
+  const habits = useMemo(
+    () => getHabitsWithHistory(dbHabits, state.logs),
+    [dbHabits, state.logs]
+  );
+
   useEffect(() => {
-    setState(loadState());
-    setGymSessions(loadGymSessions());
-    setHabits(getHabitsWithHistory());
+    loadGymSessionsFromDB().then(setGymSessions);
   }, []);
 
   const days = daysForRange(range);
 
   // Memoize computations
   const completionData = useMemo(
-    () => (state ? getCompletionByDay(state.logs, habits, days) : []),
+    () => getCompletionByDay(state.logs, habits, days),
     [state, habits, days]
   );
 
@@ -68,27 +72,27 @@ export default function InsightsPage() {
   );
 
   const weeklyData = useMemo(
-    () => (state ? getWeeklyGameData(state.logs, habits) : []),
+    () => getWeeklyGameData(state.logs, habits),
     [state, habits]
   );
 
   const badHabitTrends = useMemo(
-    () => (state ? getBadHabitTrends(state.logs, habits, Math.ceil(days / 7)) : []),
+    () => getBadHabitTrends(state.logs, habits, Math.ceil(days / 7)),
     [state, habits, days]
   );
 
   const xpCurve = useMemo(
-    () => (state ? getXpCurve(state.logs) : []),
+    () => getXpCurve(state.logs),
     [state]
   );
 
   const dayOfWeek = useMemo(
-    () => (state ? getDayOfWeekAnalysis(state.logs, habits) : []),
+    () => getDayOfWeekAnalysis(state.logs, habits),
     [state, habits]
   );
 
   const streakTimeline = useMemo(
-    () => (state ? getStreakTimeline(state.logs, habits) : []),
+    () => getStreakTimeline(state.logs, habits),
     [state, habits]
   );
 
@@ -104,17 +108,17 @@ export default function InsightsPage() {
   );
 
   const singleHabitData = useMemo(
-    () => (state && selectedHabitId ? getSingleHabitByDay(state.logs, selectedHabitId, days) : []),
+    () => (selectedHabitId ? getSingleHabitByDay(state.logs, selectedHabitId, days) : []),
     [state, selectedHabitId, days]
   );
 
   const singleHabitDOW = useMemo(
-    () => (state && selectedHabitId ? getSingleHabitDayOfWeek(state.logs, selectedHabitId) : []),
+    () => (selectedHabitId ? getSingleHabitDayOfWeek(state.logs, selectedHabitId) : []),
     [state, selectedHabitId]
   );
 
   const singleHabitStats = useMemo(
-    () => (state && selectedHabitId && selectedHabit ? getSingleHabitStats(state.logs, selectedHabitId, selectedHabit) : null),
+    () => (selectedHabitId && selectedHabit ? getSingleHabitStats(state.logs, selectedHabitId, selectedHabit) : null),
     [state, selectedHabitId, selectedHabit]
   );
 
@@ -129,7 +133,7 @@ export default function InsightsPage() {
     [habits]
   );
 
-  if (!state) return null;
+  if (loading) return null;
 
   const levelInfo = getLevelForXP(state.totalXp);
 

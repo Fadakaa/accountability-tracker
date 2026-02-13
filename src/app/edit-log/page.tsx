@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { loadState, saveState, getToday, getLevelForXP } from "@/lib/store";
+import { getToday, getLevelForXP } from "@/lib/store";
 import type { DayLog } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel, XP_VALUES, getFlameIcon } from "@/lib/habits";
 import type { Habit, LogStatus } from "@/types/database";
 import { isBinaryLike } from "@/types/database";
+import { useDB } from "@/hooks/useDB";
+import { saveDayLogToDB } from "@/lib/db";
 
 // ─── XP Recalculation ───────────────────────────────────────
 function recalculateDayXP(log: DayLog, habits: Habit[]): number {
@@ -68,15 +70,16 @@ function recalculateDayXP(log: DayLog, habits: Habit[]): number {
 
 // ─── Component ──────────────────────────────────────────────
 export default function EditLogPage() {
+  const { state, settings, dbHabits, loading, saveState: dbSaveState } = useDB();
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [log, setLog] = useState<DayLog | null>(null);
   const [originalXP, setOriginalXP] = useState(0);
   const [saved, setSaved] = useState(false);
 
-  const habits = useMemo(() => getResolvedHabits(), []);
+  const habits = useMemo(() => getResolvedHabits(false, dbHabits, settings), [dbHabits, settings]);
 
   useEffect(() => {
-    const state = loadState();
+    if (loading) return;
     const dayLog = state.logs.find((l) => l.date === selectedDate);
     if (dayLog) {
       // Deep clone to avoid mutating state
@@ -87,7 +90,7 @@ export default function EditLogPage() {
       setOriginalXP(0);
     }
     setSaved(false);
-  }, [selectedDate]);
+  }, [selectedDate, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateEntry(habitId: string, status: LogStatus) {
     if (!log) return;
@@ -139,7 +142,6 @@ export default function EditLogPage() {
   function handleSave() {
     if (!log) return;
 
-    const state = loadState();
     const logIndex = state.logs.findIndex((l) => l.date === selectedDate);
     if (logIndex === -1) return;
 
@@ -148,11 +150,14 @@ export default function EditLogPage() {
     const xpDelta = newXP - originalXP;
 
     log.xpEarned = newXP;
-    state.logs[logIndex] = log;
-    state.totalXp += xpDelta;
-    state.currentLevel = getLevelForXP(state.totalXp).level;
+    const updatedState = { ...state };
+    updatedState.logs = [...updatedState.logs];
+    updatedState.logs[logIndex] = log;
+    updatedState.totalXp += xpDelta;
+    updatedState.currentLevel = getLevelForXP(updatedState.totalXp).level;
 
-    saveState(state);
+    dbSaveState(updatedState);
+    saveDayLogToDB(log, updatedState);
     setOriginalXP(newXP);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -160,9 +165,8 @@ export default function EditLogPage() {
 
   // Get available dates (dates that have logs)
   const availableDates = useMemo(() => {
-    const state = loadState();
     return state.logs.map((l) => l.date).sort().reverse();
-  }, []);
+  }, [state.logs]);
 
   const binaryHabits = habits.filter((h) => isBinaryLike(h.category) && h.is_active);
   const measuredHabits = habits.filter((h) => h.category === "measured" && h.is_active);

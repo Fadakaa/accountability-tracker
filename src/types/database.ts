@@ -234,6 +234,75 @@ export interface GymSet {
   is_failure: boolean;
 }
 
+// ─── New tables for Supabase sync (002 migration) ──────
+
+export interface UserSettings_DB {
+  id: string;
+  user_id: string;
+  settings_json: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface AdminTask_DB {
+  id: string;
+  user_id: string;
+  title: string;
+  completed: boolean;
+  task_date: string | null;
+  source: string;
+  in_backlog: boolean;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface GymRoutine_DB {
+  id: string;
+  user_id: string;
+  name: string;
+  training_type: TrainingType;
+  muscle_group: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GymRoutineExercise_DB {
+  id: string;
+  routine_id: string;
+  exercise_name: string;
+  default_sets: number;
+  sort_order: number;
+}
+
+export interface AppUsageStats {
+  id: string;
+  user_id: string;
+  total_opens: number;
+  unique_days: number;
+  last_open_date: string | null;
+  first_open_date: string | null;
+}
+
+export interface DailyLogSummary {
+  id: string;
+  user_id: string;
+  log_date: string;
+  xp_earned: number;
+  bare_minimum_met: boolean;
+  submitted_at: string | null;
+  admin_summary: Record<string, unknown> | null;
+}
+
+export interface WrapReflection_DB {
+  id: string;
+  user_id: string;
+  reflection_date: string;
+  period: string;
+  question: string;
+  answer: string;
+  forward_intention: string | null;
+  created_at: string;
+}
+
 // Placeholder Database type for Supabase client generic
 // Replace with auto-generated types from `supabase gen types typescript`
 export type Database = {
@@ -316,6 +385,42 @@ export type Database = {
         Row: GymSet;
         Insert: Partial<GymSet>;
         Update: Partial<GymSet>;
+      };
+      // ─── New tables from 002 migration ─────
+      user_settings: {
+        Row: UserSettings_DB;
+        Insert: Partial<UserSettings_DB>;
+        Update: Partial<UserSettings_DB>;
+      };
+      admin_tasks: {
+        Row: AdminTask_DB;
+        Insert: Partial<AdminTask_DB>;
+        Update: Partial<AdminTask_DB>;
+      };
+      gym_routines: {
+        Row: GymRoutine_DB;
+        Insert: Partial<GymRoutine_DB>;
+        Update: Partial<GymRoutine_DB>;
+      };
+      gym_routine_exercises: {
+        Row: GymRoutineExercise_DB;
+        Insert: Partial<GymRoutineExercise_DB>;
+        Update: Partial<GymRoutineExercise_DB>;
+      };
+      app_usage_stats: {
+        Row: AppUsageStats;
+        Insert: Partial<AppUsageStats>;
+        Update: Partial<AppUsageStats>;
+      };
+      daily_log_summaries: {
+        Row: DailyLogSummary;
+        Insert: Partial<DailyLogSummary>;
+        Update: Partial<DailyLogSummary>;
+      };
+      wrap_reflections: {
+        Row: WrapReflection_DB;
+        Insert: Partial<WrapReflection_DB>;
+        Update: Partial<WrapReflection_DB>;
       };
     };
     Views: Record<string, never>;

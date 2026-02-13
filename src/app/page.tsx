@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadState, getTodayLog, getLevelForXP, recalculateStreaks, saveState, loadAdminTasks, recordAppOpen } from "@/lib/store";
-import type { LocalState, AdminTask, ShowingUpData } from "@/lib/store";
+import { getTodayLog, getLevelForXP, recalculateStreaks } from "@/lib/store";
+import type { AdminTask, ShowingUpData } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -14,37 +14,44 @@ import { getNextCheckinDisplay } from "@/lib/schedule";
 import { getDailyCompletionStats, getBadHabitStats, getWeekLogsFromArray, formatBadHabitDisplay } from "@/lib/completion";
 import NotificationBanner from "@/components/NotificationBanner";
 import LevelSuggestionBanner from "@/components/LevelSuggestionBanner";
+import { useDB } from "@/hooks/useDB";
+import { loadAdminTasksFromDB, recordAppOpenToDB } from "@/lib/db";
 
 export default function Home() {
-  const [state, setState] = useState<LocalState | null>(null);
+  const { state, settings, dbHabits, saveState: dbSaveState, loading } = useDB();
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
   const [nextCheckin, setNextCheckin] = useState<string>("");
   const [showingUp, setShowingUp] = useState<ShowingUpData | null>(null);
 
   useEffect(() => {
-    // Load state and recalculate streaks from log history (source of truth)
-    const loaded = loadState();
-    const allHabits = getResolvedHabits();
+    if (loading) return;
+
+    // Recalculate streaks from log history (source of truth)
+    const allHabits = getResolvedHabits(false, dbHabits, settings);
     const habitSlugsById: Record<string, string> = {};
     for (const h of allHabits) {
       habitSlugsById[h.id] = h.slug;
     }
-    loaded.streaks = recalculateStreaks(loaded, habitSlugsById);
-    saveState(loaded);
-    setState(loaded);
+    const updated = { ...state };
+    updated.streaks = recalculateStreaks(updated, habitSlugsById);
+    dbSaveState(updated);
+
     setWeakHabits(getWeakHabits());
-    setAdminTasks(loadAdminTasks());
     setNextCheckin(getNextCheckinDisplay());
-    setShowingUp(recordAppOpen());
+
+    // Load admin tasks and record app open (async)
+    loadAdminTasksFromDB().then(setAdminTasks);
+    recordAppOpenToDB().then(setShowingUp);
+
     if (getNotificationPermission() === "granted") {
       startNotificationScheduler();
       syncScheduleToServiceWorker();
       syncCompletionToServiceWorker();
     }
-  }, []);
+  }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const todayLog = state ? getTodayLog(state) : undefined;
+  const todayLog = getTodayLog(state);
   const levelInfo = getLevelForXP(state?.totalXp ?? 0);
   const xpProgress =
     levelInfo.nextXp > levelInfo.xpRequired
@@ -52,8 +59,8 @@ export default function Home() {
         (levelInfo.nextXp - levelInfo.xpRequired)
       : 0;
 
-  // Dynamic habit lists from resolved habits (respects user settings)
-  const resolvedHabits = getResolvedHabits();
+  // Dynamic habit lists from resolved habits (respects user settings + DB habits)
+  const resolvedHabits = getResolvedHabits(false, dbHabits, settings);
   const badHabits = resolvedHabits.filter((h) => h.category === "bad" && h.is_active);
 
   // Completion stats from shared service — single source of truth

@@ -1,13 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadState, saveState, getToday, saveGymSession, loadGymSessions, recalculateStreaks } from "@/lib/store";
+import { getToday, recalculateStreaks } from "@/lib/store";
 import type { GymSessionLocal, GymExerciseLocal, GymSetLocal, GymRoutine, GymRoutineExercise } from "@/lib/store";
-import { loadGymRoutines, createGymRoutine, updateGymRoutine, deleteGymRoutine } from "@/lib/store";
 import type { TrainingType } from "@/types/database";
 import { XP_VALUES } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import VoiceInput from "@/components/VoiceInput";
+import { useDB } from "@/hooks/useDB";
+import {
+  loadGymSessionsFromDB, saveGymSessionToDB,
+  loadGymRoutinesFromDB, saveGymRoutineToDB, deleteGymRoutineFromDB,
+} from "@/lib/db";
 
 // ─── Constants ──────────────────────────────────────────────
 const MUSCLE_GROUPS = ["Chest", "Back", "Shoulders", "Arms", "Legs", "Core", "Full Body"];
@@ -24,6 +28,7 @@ const COMMON_EXERCISES: Record<string, string[]> = {
 type Phase = "setup" | "logging" | "complete" | "archive" | "routines";
 
 export default function GymPage() {
+  const { state, settings, dbHabits, loading, saveState: dbSaveState } = useDB();
   const [phase, setPhase] = useState<Phase>("setup");
   const [trainingType, setTrainingType] = useState<TrainingType>("gym");
   const [muscleGroup, setMuscleGroup] = useState<string>("");
@@ -33,20 +38,20 @@ export default function GymPage() {
   const [durationMinutes, setDurationMinutes] = useState<number | null>(null);
   const [savedSession, setSavedSession] = useState<GymSessionLocal | null>(null);
 
-  // Past sessions for history
+  // Past sessions for history (async from DB)
   const [pastSessions, setPastSessions] = useState<GymSessionLocal[]>([]);
   useEffect(() => {
-    setPastSessions(loadGymSessions());
+    loadGymSessionsFromDB().then(setPastSessions);
   }, []);
 
-  // Routines
+  // Routines (async from DB)
   const [routines, setRoutines] = useState<GymRoutine[]>([]);
   useEffect(() => {
-    setRoutines(loadGymRoutines());
+    loadGymRoutinesFromDB().then(setRoutines);
   }, []);
 
   function refreshRoutines() {
-    setRoutines(loadGymRoutines());
+    loadGymRoutinesFromDB().then(setRoutines);
   }
 
   // ─── Load from Routine ───────────────────────────────────
@@ -70,7 +75,9 @@ export default function GymPage() {
   // ─── Save Session as Routine ─────────────────────────────
   function handleSaveAsRoutine(name: string) {
     if (!savedSession || savedSession.exercises.length === 0) return;
-    createGymRoutine({
+    const now = new Date().toISOString();
+    const newRoutine: GymRoutine = {
+      id: crypto.randomUUID(),
       name,
       trainingType: savedSession.trainingType,
       muscleGroup: savedSession.muscleGroup,
@@ -78,22 +85,25 @@ export default function GymPage() {
         name: ex.name,
         defaultSets: ex.sets.length,
       })),
-    });
+      createdAt: now,
+      updatedAt: now,
+    };
+    saveGymRoutineToDB(newRoutine);
     refreshRoutines();
   }
 
   // ─── Just Walked In ────────────────────────────────────
   function handleJustWalkedIn() {
-    const state = loadState();
+    const currentState = { ...state, logs: state.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } })) };
     const today = getToday();
-    const trainingHabit = getResolvedHabits().find((h) => h.slug === "training");
+    const trainingHabit = getResolvedHabits(false, dbHabits, settings).find((h) => h.slug === "training");
 
     if (trainingHabit) {
-      const existingLog = state.logs.find((l) => l.date === today);
+      const existingLog = currentState.logs.find((l) => l.date === today);
       if (existingLog) {
         existingLog.entries[trainingHabit.id] = { status: "done", value: null };
       } else {
-        state.logs.push({
+        currentState.logs.push({
           date: today,
           entries: { [trainingHabit.id]: { status: "done", value: null } },
           badEntries: {},
@@ -103,13 +113,13 @@ export default function GymPage() {
         });
       }
       // Recalculate streaks from log history (source of truth)
-      const allHabits = getResolvedHabits();
+      const allHabits = getResolvedHabits(false, dbHabits, settings);
       const habitSlugsById: Record<string, string> = {};
       for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
-      state.streaks = recalculateStreaks(state, habitSlugsById);
+      currentState.streaks = recalculateStreaks(currentState, habitSlugsById);
 
-      state.totalXp += XP_VALUES.BARE_MINIMUM_HABIT;
-      saveState(state);
+      currentState.totalXp += XP_VALUES.BARE_MINIMUM_HABIT;
+      dbSaveState(currentState);
     }
 
     // Save minimal gym session
@@ -125,7 +135,7 @@ export default function GymPage() {
       exercises: [],
       createdAt: new Date().toISOString(),
     };
-    saveGymSession(session);
+    saveGymSessionToDB(session);
     setSavedSession(session);
     setPhase("complete");
   }
@@ -199,19 +209,20 @@ export default function GymPage() {
       exercises,
       createdAt: new Date().toISOString(),
     };
-    saveGymSession(session);
+    saveGymSessionToDB(session);
 
     // Update state — mark training as done + add XP
-    const state = loadState();
+    const currentState = { ...state, logs: state.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } })) };
     const today = getToday();
-    const trainingHabit = getResolvedHabits().find((h) => h.slug === "training");
-    const trainingMinutesHabit = getResolvedHabits().find((h) => h.slug === "training-minutes");
-    const rpeHabit = getResolvedHabits().find((h) => h.slug === "rpe");
+    const resolvedHabits = getResolvedHabits(false, dbHabits, settings);
+    const trainingHabit = resolvedHabits.find((h) => h.slug === "training");
+    const trainingMinutesHabit = resolvedHabits.find((h) => h.slug === "training-minutes");
+    const rpeHabit = resolvedHabits.find((h) => h.slug === "rpe");
 
     let xp = 0;
 
     if (trainingHabit) {
-      const existingLog = state.logs.find((l) => l.date === today);
+      const existingLog = currentState.logs.find((l) => l.date === today);
       if (existingLog) {
         existingLog.entries[trainingHabit.id] = { status: "done", value: null };
         if (trainingMinutesHabit && durationMinutes) {
@@ -230,7 +241,7 @@ export default function GymPage() {
         if (rpeHabit && rpe) {
           entries[rpeHabit.id] = { status: "done", value: rpe };
         }
-        state.logs.push({
+        currentState.logs.push({
           date: today,
           entries,
           badEntries: {},
@@ -250,23 +261,25 @@ export default function GymPage() {
       }
 
       // Recalculate streaks from log history (source of truth)
-      const allHabits = getResolvedHabits();
+      const allHabits = getResolvedHabits(false, dbHabits, settings);
       const habitSlugsById: Record<string, string> = {};
       for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
-      state.streaks = recalculateStreaks(state, habitSlugsById);
+      currentState.streaks = recalculateStreaks(currentState, habitSlugsById);
 
-      state.totalXp += xp;
+      currentState.totalXp += xp;
 
       // Update today's log XP
-      const todayLog = state.logs.find((l) => l.date === today);
+      const todayLog = currentState.logs.find((l) => l.date === today);
       if (todayLog) todayLog.xpEarned += xp;
 
-      saveState(state);
+      dbSaveState(currentState);
     }
 
     setSavedSession(session);
     setPhase("complete");
   }
+
+  if (loading) return null;
 
   // ─── Setup Phase ───────────────────────────────────────
   if (phase === "setup") {
@@ -808,28 +821,38 @@ function RoutinesManager({
   }
 
   function saveEdit(id: string) {
-    updateGymRoutine(id, {
+    const routine = routines.find((r) => r.id === id);
+    if (!routine) return;
+    const updated: GymRoutine = {
+      ...routine,
       name: editName.trim(),
       exercises: editExercises,
-    });
+      updatedAt: new Date().toISOString(),
+    };
+    saveGymRoutineToDB(updated);
     cancelEdit();
     onRefresh();
   }
 
   function handleDelete(id: string) {
-    deleteGymRoutine(id);
+    deleteGymRoutineFromDB(id);
     setConfirmDeleteId(null);
     onRefresh();
   }
 
   function handleCreateRoutine() {
     if (!newName.trim() || newExercises.length === 0) return;
-    createGymRoutine({
+    const now = new Date().toISOString();
+    const newRoutine: GymRoutine = {
+      id: crypto.randomUUID(),
       name: newName.trim(),
       trainingType: newType,
       muscleGroup: newType === "gym" ? newMuscle || null : null,
       exercises: newExercises,
-    });
+      createdAt: now,
+      updatedAt: now,
+    };
+    saveGymRoutineToDB(newRoutine);
     setShowCreate(false);
     setNewName("");
     setNewType("gym");

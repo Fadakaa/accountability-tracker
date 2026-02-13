@@ -6,7 +6,8 @@ import { loadSettings, saveSettings } from "./store";
 import { HABITS } from "./habits";
 import type { Habit, HabitCategory, HabitStack } from "@/types/database";
 
-const USER_ID = "00000000-0000-0000-0000-000000000001";
+// Fallback user ID for offline/unauthenticated mode
+const FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -21,7 +22,7 @@ export interface CreateHabitInput {
 
 // ─── CRUD Functions ─────────────────────────────────────
 
-export function createHabit(input: CreateHabitInput): Habit {
+export function createHabit(input: CreateHabitInput, userId?: string): Habit {
   const settings = loadSettings();
   const customHabits = settings.customHabits ?? [];
   const id = crypto.randomUUID();
@@ -40,7 +41,7 @@ export function createHabit(input: CreateHabitInput): Habit {
 
   const habit: Habit = {
     id,
-    user_id: USER_ID,
+    user_id: userId ?? FALLBACK_USER_ID,
     name: input.name.trim(),
     slug,
     category: input.category,

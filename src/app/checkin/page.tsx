@@ -2,9 +2,11 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
-import { loadState, saveState, getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask, getAdminSummary } from "@/lib/store";
+import { getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask, getAdminSummary } from "@/lib/store";
 import type { DayLog, DeferredHabit, AdminTask } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
+import { useDB } from "@/hooks/useDB";
+import { loadAdminTasksFromDB } from "@/lib/db";
 import { isHabitWeak } from "@/lib/weakness";
 import { startEscalation, resolveEscalation, syncCompletionToServiceWorker } from "@/lib/notifications";
 import { apiUrl } from "@/lib/api";
@@ -37,6 +39,7 @@ type SubmissionResult = {
 
 // ─── Component ──────────────────────────────────────────────
 export default function CheckinPage() {
+  const { state: dbState, settings, dbHabits, loading, saveState: dbSaveState, saveDayLog } = useDB();
   const [activeStack, setActiveStack] = useState<HabitStack>(getCurrentStack);
   const [phase, setPhase] = useState<"checkin" | "result">("checkin");
 
@@ -67,9 +70,10 @@ export default function CheckinPage() {
   const [dayDismissed, setDayDismissed] = useState(false);
 
   useEffect(() => {
-    const state = loadState();
-    setStreaks(state.streaks);
-    setAdminTasks(loadAdminTasks());
+    if (loading) return;
+
+    setStreaks(dbState.streaks);
+    loadAdminTasksFromDB().then(setAdminTasks);
 
     // Check sessionStorage for day-level dismissal
     const dismissKey = `lock-dismissed-${getToday()}`;
@@ -79,9 +83,9 @@ export default function CheckinPage() {
 
     // Pre-load any partial progress for today
     const today = getToday();
-    const todayLog = state.logs.find((l) => l.date === today);
+    const todayLog = dbState.logs.find((l) => l.date === today);
     if (todayLog && phase === "checkin") {
-      const stackHabitIds = new Set(getResolvedHabitsByChainOrder(activeStack).map((h) => h.id));
+      const stackHabitIds = new Set(getResolvedHabitsByChainOrder(activeStack, dbHabits, settings).map((h) => h.id));
       // Also include deferred habits that landed in this stack
       const deferredToHere = getDeferredForStack(activeStack);
       for (const d of deferredToHere) {
@@ -120,11 +124,11 @@ export default function CheckinPage() {
     }
 
     // Check if current stack is already submitted
-    checkStackLock(activeStack, state);
-  }, [activeStack]);
+    checkStackLock(activeStack, dbState);
+  }, [activeStack, loading]);
 
-  function checkStackLock(stack: HabitStack, state?: ReturnType<typeof loadState>) {
-    const s = state ?? loadState();
+  function checkStackLock(stack: HabitStack, state?: typeof dbState) {
+    const s = state ?? dbState;
     const today = getToday();
     const todayLog = s.logs.find((l) => l.date === today);
     if (!todayLog) {
@@ -132,7 +136,7 @@ export default function CheckinPage() {
       return;
     }
 
-    const stackHabits = getResolvedHabitsByChainOrder(stack);
+    const stackHabits = getResolvedHabitsByChainOrder(stack, dbHabits, settings);
     // Exclude habits that have been deferred to a later stack
     const stackBinary = stackHabits.filter((h) => isBinaryLike(h.category) && h.is_active && !isDeferredAway(h.id));
     const stackBad = stackHabits.filter((h) => h.category === "bad" && h.is_active);
@@ -168,7 +172,7 @@ export default function CheckinPage() {
       setStackAlreadyDone(true);
 
       // Check if ALL stacks are done (uses shared service)
-      const allResolvedHabits = getResolvedHabits();
+      const allResolvedHabits = getResolvedHabits(false, dbHabits, settings);
       setAllStacksDone(areAllStacksAnswered(todayLog, allResolvedHabits));
     } else {
       setStackAlreadyDone(false);
@@ -185,15 +189,15 @@ export default function CheckinPage() {
     let habits: Habit[];
     if (sprint.singleCheckin) {
       // Critical mode: show ALL stacks' habits combined
-      const morning = getResolvedHabitsByChainOrder("morning");
-      const midday = getResolvedHabitsByChainOrder("midday");
-      const evening = getResolvedHabitsByChainOrder("evening");
+      const morning = getResolvedHabitsByChainOrder("morning", dbHabits, settings);
+      const midday = getResolvedHabitsByChainOrder("midday", dbHabits, settings);
+      const evening = getResolvedHabitsByChainOrder("evening", dbHabits, settings);
       habits = [...morning, ...midday, ...evening];
     } else {
-      habits = getResolvedHabitsByChainOrder(activeStack);
+      habits = getResolvedHabitsByChainOrder(activeStack, dbHabits, settings);
     }
     return habits;
-  }, [activeStack, sprint.singleCheckin]);
+  }, [activeStack, sprint.singleCheckin, dbHabits, settings]);
 
   // Split into categories — for intense/critical, separate bare minimum from extras
   // Also filter out habits that have been deferred to a later stack
@@ -205,11 +209,11 @@ export default function CheckinPage() {
   const deferredToThisStack = useMemo(() => {
     if (sprint.singleCheckin) return []; // No deferrals in single-checkin sprint mode
     const deferred = getDeferredForStack(activeStack);
-    const allHabits = getResolvedHabits();
+    const allHabits = getResolvedHabits(false, dbHabits, settings);
     return deferred
       .map((d) => allHabits.find((h) => h.id === d.habitId))
       .filter((h): h is ResolvedHabit => h != null);
-  }, [activeStack, sprint.singleCheckin]);
+  }, [activeStack, sprint.singleCheckin, dbHabits, settings]);
 
   // Sprint filtering: bare minimum only for intense/critical, but extras are still visible
   const binaryHabits = sprint.bareMinimumOnly
@@ -263,7 +267,7 @@ export default function CheckinPage() {
     });
 
     // Escalation triggers
-    const habit = getResolvedHabits().find((h) => h.id === habitId);
+    const habit = getResolvedHabits(false, dbHabits, settings).find((h) => h.id === habitId);
     if (!habit) return;
 
     if (status === "later") {
@@ -290,7 +294,7 @@ export default function CheckinPage() {
 
   function handleKeepEscalating() {
     if (!deferModalHabitId) return;
-    const habit = getResolvedHabits().find((h) => h.id === deferModalHabitId);
+    const habit = getResolvedHabits(false, dbHabits, settings).find((h) => h.id === deferModalHabitId);
     if (habit) {
       // Start Fibonacci escalation
       startEscalation(deferModalHabitId, habit.name, habit.icon || "");
@@ -346,7 +350,7 @@ export default function CheckinPage() {
   const [savedPartial, setSavedPartial] = useState(false);
 
   function handleSavePartial() {
-    const state = loadState();
+    const state = { ...dbState, logs: [...dbState.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } }))] };
     const today = getToday();
 
     // Build partial entry records
@@ -381,7 +385,7 @@ export default function CheckinPage() {
       });
     }
 
-    saveState(state);
+    dbSaveState(state);
     // Update SW about completion state so it can suppress notifications for done stacks
     syncCompletionToServiceWorker();
     setSavedPartial(true);
@@ -392,8 +396,8 @@ export default function CheckinPage() {
     // Calculate XP
     let xp = 0;
 
-    // Load current state for streak calculations
-    const state = loadState();
+    // Deep clone dbState so mutations don't affect the hook's state directly
+    const state = { ...dbState, streaks: { ...dbState.streaks }, logs: [...dbState.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } }))] };
     const today = getToday();
 
     // ─── 1. Calculate XP from binary habits ─────────────────
@@ -448,7 +452,7 @@ export default function CheckinPage() {
     }
 
     // Bare minimum bonus — check ALL bare minimum habits across all stacks
-    const allBareMinHabits = getResolvedHabits().filter((h) => h.is_bare_minimum && h.is_active);
+    const allBareMinHabits = getResolvedHabits(false, dbHabits, settings).filter((h) => h.is_bare_minimum && h.is_active);
     const stackBareMinDone = binaryHabits
       .filter((h) => h.is_bare_minimum)
       .every((h) => entries.get(h.id)?.status === "done");
@@ -522,7 +526,7 @@ export default function CheckinPage() {
     // This is the source of truth — counts consecutive days with "done"
     // working backwards from today. No matter how many times you submit
     // on the same day, the streak count stays correct.
-    const allHabits = getResolvedHabits();
+    const allHabits = getResolvedHabits(false, dbHabits, settings);
     const habitSlugsById: Record<string, string> = {};
     for (const h of allHabits) {
       habitSlugsById[h.id] = h.slug;
@@ -546,7 +550,9 @@ export default function CheckinPage() {
     state.totalXp += xp;
     state.currentLevel = getLevelForXP(state.totalXp).level;
 
-    saveState(state);
+    // Find the final today log for saveDayLog
+    const finalDayLog = state.logs.find((l) => l.date === today)!;
+    saveDayLog(finalDayLog, state);
 
     // Tell service worker which stacks are complete (suppresses future notifications)
     syncCompletionToServiceWorker();
@@ -582,6 +588,15 @@ export default function CheckinPage() {
       adminTotal: adminSummary.total,
     });
     setPhase("result");
+  }
+
+  // ─── Loading state ─────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-neutral-500 text-sm">Loading...</div>
+      </div>
+    );
   }
 
   // ─── Result Screen ─────────────────────────────────────────
@@ -1203,7 +1218,7 @@ export default function CheckinPage() {
             </h3>
             <p className="text-xs text-neutral-500 text-center mb-5">
               {(() => {
-                const h = getResolvedHabits().find((h) => h.id === deferModalHabitId);
+                const h = getResolvedHabits(false, dbHabits, settings).find((h) => h.id === deferModalHabitId);
                 return h ? `${h.icon} ${h.name}` : "";
               })()}
             </p>

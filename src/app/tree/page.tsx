@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { loadState } from "@/lib/store";
-import type { LocalState } from "@/lib/store";
+import { useState, useEffect } from "react";
+import { useDB } from "@/hooks/useDB";
 import { HABIT_LEVELS, getFlameIcon } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { evaluateLevelSuggestions, acceptLevelUp, declineLevelUp, acceptDropBack } from "@/lib/adaptive";
@@ -13,6 +12,7 @@ import {
   getBranchDef,
   type TreeBranchName,
 } from "@/lib/treeBranches";
+import type { ResolvedHabit } from "@/lib/resolvedHabits";
 
 // ─── Skill Tree Data ────────────────────────────────────────
 interface SkillNode {
@@ -33,9 +33,7 @@ interface SkillBranch {
 }
 
 // Build branches dynamically using auto-branching
-function buildSkillTree(): SkillBranch[] {
-  const resolvedHabits = getResolvedHabits();
-
+function buildSkillTree(resolvedHabits: ResolvedHabit[]): SkillBranch[] {
   // Map habit IDs that have levels
   const habitMap = new Map<string, SkillNode[]>();
   for (const hl of HABIT_LEVELS) {
@@ -87,20 +85,21 @@ function buildSkillTree(): SkillBranch[] {
 
 // ─── Component ──────────────────────────────────────────────
 export default function SkillTreePage() {
-  const [state, setState] = useState<LocalState | null>(null);
+  const { state, settings, dbHabits, loading, refresh } = useDB();
   const [suggestions, setSuggestions] = useState<LevelSuggestion[]>([]);
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
-  const branches = buildSkillTree();
+
+  const resolvedHabits = getResolvedHabits(false, dbHabits, settings);
+  const branches = buildSkillTree(resolvedHabits);
 
   useEffect(() => {
-    setState(loadState());
     // Show ALL suggestions — level_up and drop_back
     setSuggestions(evaluateLevelSuggestions());
-  }, []);
+  }, [loading]);
 
   function handleAcceptLevelUp(habitId: string) {
     acceptLevelUp(habitId);
-    setState(loadState());
+    refresh();
     setDismissedSuggestions((prev) => new Set(prev).add(habitId));
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }
@@ -113,7 +112,7 @@ export default function SkillTreePage() {
 
   function handleAcceptDropBack(habitId: string) {
     acceptDropBack(habitId);
-    setState(loadState());
+    refresh();
     setDismissedSuggestions((prev) => new Set(prev).add(habitId));
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }
@@ -125,10 +124,7 @@ export default function SkillTreePage() {
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }
 
-  if (!state) return null;
-
-  // Get resolved habits for current_level lookups
-  const resolvedHabits = getResolvedHabits();
+  if (loading) return null;
 
   // Calculate tree health: weighted score from unlocked levels (60%) + active streaks (40%)
   let totalNodes = 0;

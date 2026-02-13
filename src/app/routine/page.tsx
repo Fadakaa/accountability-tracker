@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { loadSettings, saveSettings } from "@/lib/store";
-import type { UserSettings, ChainItem } from "@/lib/store";
+import { useState, useCallback } from "react";
+import { useDB } from "@/hooks/useDB";
+import type { ChainItem } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import type { Habit, HabitStack } from "@/types/database";
 
@@ -15,24 +15,17 @@ const STACKS: { key: HabitStack; label: string; icon: string; color: string }[] 
 
 // ─── Component ──────────────────────────────────────────────
 export default function RoutinePage() {
-  const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [habits, setHabits] = useState<Habit[]>([]);
+  const { settings, dbHabits, loading, saveSettings } = useDB();
   const [dragItem, setDragItem] = useState<{ stack: HabitStack; index: number } | null>(null);
   const [showAddAnchor, setShowAddAnchor] = useState<HabitStack | null>(null);
   const [anchorLabel, setAnchorLabel] = useState("");
   const [anchorIcon, setAnchorIcon] = useState("📌");
   const [moveTarget, setMoveTarget] = useState<{ stack: HabitStack; index: number } | null>(null);
 
-  useEffect(() => {
-    const s = loadSettings();
-    setSettings(s);
-    setHabits(getResolvedHabits());
-  }, []);
+  const habits = getResolvedHabits(false, dbHabits, settings);
 
   // Initialize chains from habits if empty
   const getChains = useCallback((): Record<HabitStack, ChainItem[]> => {
-    if (!settings) return { morning: [], midday: [], evening: [] };
-
     const chains = { ...settings.routineChains };
 
     // If chains are empty, auto-populate from habits
@@ -54,9 +47,7 @@ export default function RoutinePage() {
   }, [settings, habits]);
 
   function persistChains(newChains: Record<HabitStack, ChainItem[]>) {
-    if (!settings) return;
     const newSettings = { ...settings, routineChains: newChains };
-    setSettings(newSettings);
     saveSettings(newSettings);
   }
 
@@ -98,7 +89,7 @@ export default function RoutinePage() {
     setShowAddAnchor(null);
   }
 
-  if (!settings) return null;
+  if (loading) return null;
 
   const chains = getChains();
 

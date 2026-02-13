@@ -20,6 +20,7 @@ import { getFlameIcon, XP_VALUES } from "@/lib/habits";
 import type { Habit } from "@/types/database";
 import { isBinaryLike } from "@/types/database";
 import VoiceInput from "@/components/VoiceInput";
+import { useDB } from "@/hooks/useDB";
 
 // ─── Types ──────────────────────────────────────────────────
 interface WrapCard {
@@ -46,6 +47,7 @@ function getWeeklyQuestion(): string {
 
 // ─── Component ──────────────────────────────────────────────
 export default function WrapPage() {
+  const { state: dbState, settings, dbHabits, loading, saveState: dbSaveState } = useDB();
   const [state, setState] = useState<LocalState | null>(null);
   const [currentCard, setCurrentCard] = useState(0);
   const [reflectionAnswer, setReflectionAnswer] = useState("");
@@ -57,18 +59,19 @@ export default function WrapPage() {
   const touchStartY = useRef(0);
 
   useEffect(() => {
-    const loaded = loadState();
+    if (loading) return;
+    const loaded = { ...dbState };
     // Recalculate streaks from log history (source of truth)
-    const allHabits = getResolvedHabits();
+    const allHabits = getResolvedHabits(false, dbHabits, settings);
     const habitSlugsById: Record<string, string> = {};
     for (const h of allHabits) {
       habitSlugsById[h.id] = h.slug;
     }
     loaded.streaks = recalculateStreaks(loaded, habitSlugsById);
-    saveState(loaded);
+    dbSaveState(loaded);
     setState(loaded);
     setTomorrowTasks(loadAdminTasks(getTomorrowDate()));
-  }, []);
+  }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleAddTomorrowTask() {
     if (!newTomorrowText.trim()) return;
@@ -159,11 +162,11 @@ export default function WrapPage() {
     // Bonus XP for planning tomorrow's admin tasks
     if (tomorrowTasks.length > 0) newState.totalXp += XP_VALUES.PLAN_TOMORROW_SET;
 
-    saveState(newState);
+    dbSaveState(newState);
     setCompleted(true);
   }
 
-  if (!state) return null;
+  if (loading || !state) return null;
 
   // Completed screen
   if (completed) {

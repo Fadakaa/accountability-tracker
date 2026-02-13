@@ -2,9 +2,6 @@
 
 import { useState, useEffect, useMemo } from "react";
 import {
-  loadAdminTasks,
-  loadAdminBacklog,
-  loadAllAdminTasks,
   addAdminTask,
   toggleAdminTask,
   removeAdminTask,
@@ -12,8 +9,10 @@ import {
   unfocusBacklogTask,
   getToday,
   getCompletedAdminHistory,
+  loadAllAdminTasks,
 } from "@/lib/store";
 import type { AdminTask } from "@/lib/store";
+import { loadAdminTasksFromDB, loadAdminBacklogFromDB, saveAdminTaskToDB, deleteAdminTaskFromDB } from "@/lib/db";
 
 type Tab = "today" | "backlog" | "history";
 
@@ -25,9 +24,13 @@ export default function AdminPage() {
   const [showAddInput, setShowAddInput] = useState(false);
   const [showFocusPicker, setShowFocusPicker] = useState(false);
 
-  function refresh() {
-    setTodayTasks(loadAdminTasks());
-    setBacklog(loadAdminBacklog());
+  async function refresh() {
+    const [tasks, bl] = await Promise.all([
+      loadAdminTasksFromDB(),
+      loadAdminBacklogFromDB(),
+    ]);
+    setTodayTasks(tasks);
+    setBacklog(bl);
   }
 
   useEffect(() => {
@@ -46,7 +49,8 @@ export default function AdminPage() {
 
   function handleAddTask(target: "today" | "backlog") {
     if (!newTaskText.trim()) return;
-    addAdminTask(newTaskText.trim(), target === "backlog" ? "backlog" : "adhoc");
+    const task = addAdminTask(newTaskText.trim(), target === "backlog" ? "backlog" : "adhoc");
+    saveAdminTaskToDB(task);
     setNewTaskText("");
     setShowAddInput(false);
     refresh();
@@ -54,21 +58,31 @@ export default function AdminPage() {
 
   function handleFocus(taskId: string) {
     focusBacklogTask(taskId);
+    // Sync updated task to DB — re-read from localStorage to get new state
+    const updated = loadAllAdminTasks().find((t) => t.id === taskId);
+    if (updated) saveAdminTaskToDB(updated);
     refresh();
   }
 
   function handleUnfocus(taskId: string) {
     unfocusBacklogTask(taskId);
+    // Sync updated task to DB
+    const updated = loadAllAdminTasks().find((t) => t.id === taskId);
+    if (updated) saveAdminTaskToDB(updated);
     refresh();
   }
 
   function handleToggle(taskId: string) {
     toggleAdminTask(taskId);
+    // Sync updated task to DB
+    const updated = loadAllAdminTasks().find((t) => t.id === taskId);
+    if (updated) saveAdminTaskToDB(updated);
     refresh();
   }
 
   function handleRemove(taskId: string) {
     removeAdminTask(taskId);
+    deleteAdminTaskFromDB(taskId);
     refresh();
   }
 

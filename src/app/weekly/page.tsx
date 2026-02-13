@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { loadState, getWeekLogs, getPrevWeekLogs, getMonthLogs } from "@/lib/store";
-import type { LocalState, DayLog } from "@/lib/store";
+import { useState } from "react";
+import { useDB } from "@/hooks/useDB";
+import { getWeekLogs, getPrevWeekLogs, getMonthLogs } from "@/lib/store";
+import type { DayLog } from "@/lib/store";
 import { getFlameIcon } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 
@@ -20,14 +21,12 @@ interface TargetStat {
 
 // ─── Component ──────────────────────────────────────────────
 export default function WeeklyPage() {
-  const [state, setState] = useState<LocalState | null>(null);
+  const { state, settings, dbHabits, loading } = useDB();
   const [view, setView] = useState<ViewMode>("weekly");
 
-  useEffect(() => {
-    setState(loadState());
-  }, []);
+  if (loading) return null;
 
-  if (!state) return null;
+  const resolvedHabits = getResolvedHabits(false, dbHabits, settings);
 
   const weekLogs = getWeekLogs(state);
   const prevWeekLogs = getPrevWeekLogs(state);
@@ -43,7 +42,7 @@ export default function WeeklyPage() {
   const prevBareMinDays = prevLogs.filter((l) => l.bareMinimumMet).length;
 
   // Training sessions (binary "training" habit marked done)
-  const trainingHabit = getResolvedHabits().find((h) => h.slug === "training");
+  const trainingHabit = resolvedHabits.find((h) => h.slug === "training");
   const trainingDone = logs.filter(
     (l) => trainingHabit && l.entries[trainingHabit.id]?.status === "done"
   ).length;
@@ -52,7 +51,7 @@ export default function WeeklyPage() {
   ).length;
 
   // Bible chapters (measured)
-  const bibleChaptersHabit = getResolvedHabits().find((h) => h.slug === "bible-chapters");
+  const bibleChaptersHabit = resolvedHabits.find((h) => h.slug === "bible-chapters");
   const bibleChapters = logs.reduce((sum, l) => {
     if (!bibleChaptersHabit) return sum;
     return sum + (l.entries[bibleChaptersHabit.id]?.value ?? 0);
@@ -63,7 +62,7 @@ export default function WeeklyPage() {
   }, 0);
 
   // Deep work blocks (measured)
-  const deepWorkHabit = getResolvedHabits().find((h) => h.slug === "deep-work");
+  const deepWorkHabit = resolvedHabits.find((h) => h.slug === "deep-work");
   const deepWorkBlocks = logs.reduce((sum, l) => {
     if (!deepWorkHabit) return sum;
     return sum + (l.entries[deepWorkHabit.id]?.value ?? 0);
@@ -74,7 +73,7 @@ export default function WeeklyPage() {
   }, 0);
 
   // Pages read (measured)
-  const pagesHabit = getResolvedHabits().find((h) => h.slug === "pages-read");
+  const pagesHabit = resolvedHabits.find((h) => h.slug === "pages-read");
   const pagesRead = logs.reduce((sum, l) => {
     if (!pagesHabit) return sum;
     return sum + (l.entries[pagesHabit.id]?.value ?? 0);
@@ -95,7 +94,7 @@ export default function WeeklyPage() {
     { slug: "hygiene", icon: "🚿", label: "Hygiene delayed", unit: "days" },
   ];
   const badHabitIds: Record<string, string> = {};
-  for (const h of getResolvedHabits().filter((h) => h.category === "bad")) {
+  for (const h of resolvedHabits.filter((h) => h.category === "bad")) {
     badHabitIds[h.slug] = h.id;
   }
 
@@ -294,7 +293,7 @@ export default function WeeklyPage() {
             .sort(([, a], [, b]) => b - a)
             .slice(0, 6)
             .map(([slug, days]) => {
-              const habit = getResolvedHabits().find((h) => h.slug === slug);
+              const habit = resolvedHabits.find((h) => h.slug === slug);
               return (
                 <div
                   key={slug}

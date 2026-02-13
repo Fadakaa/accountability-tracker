@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings, saveSettings, saveState, loadState, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks } from "@/lib/store";
+import { loadSettings as loadSettingsLocal, loadState as loadStateLocal, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks } from "@/lib/store";
 import type { UserSettings, HabitOverride, LocalState, NotificationSlot } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
@@ -13,6 +13,9 @@ import { syncScheduleToServiceWorker } from "@/lib/notifications";
 import { apiUrl } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
 import { createHabit, updateCustomHabit, deleteCustomHabit, isDefaultHabit, type CreateHabitInput } from "@/lib/habitCrud";
+import { useDB } from "@/hooks/useDB";
+import { saveSettingsToDB, saveStateToDB, loadStateFromDB, loadSettingsFromDB, loadHabitsFromDB } from "@/lib/db";
+import { migrateLocalStorageToSupabase, isMigrated } from "@/lib/sync/migration";
 
 const STACKS: { key: HabitStack; label: string; icon: string }[] = [
   { key: "morning", label: "AM", icon: "🌅" },
@@ -22,15 +25,19 @@ const STACKS: { key: HabitStack; label: string; icon: string }[] = [
 
 export default function SettingsPage() {
   const { user, signOut } = useAuth();
-  const [settings, setSettings] = useState<UserSettings | null>(null);
+  const { state, settings, dbHabits, loading, saveState: dbSaveState, saveSettings: dbSaveSettings } = useDB();
+  const [localSettings, setLocalSettings] = useState<UserSettings | null>(null);
   const [habits, setHabits] = useState<Habit[]>([]);
 
+  // Sync from useDB once loaded
   useEffect(() => {
-    setSettings(loadSettings());
-    setHabits(getResolvedHabits());
-  }, []);
+    if (!loading) {
+      setLocalSettings(settings);
+      setHabits(getResolvedHabits(false, dbHabits, settings));
+    }
+  }, [loading, settings, dbHabits]);
 
-  if (!settings) return null;
+  if (loading || !localSettings) return null;
 
   // Group habits by stack
   const byStack: Record<HabitStack, Habit[]> = {
@@ -45,21 +52,21 @@ export default function SettingsPage() {
 
   // Persist changes immediately
   function updateHabit(habitId: string, overrideUpdate: Partial<HabitOverride>) {
-    if (!settings) return;
+    if (!localSettings) return;
     const newSettings = {
-      ...settings,
+      ...localSettings,
       habitOverrides: {
-        ...settings.habitOverrides,
+        ...localSettings.habitOverrides,
         [habitId]: {
-          ...settings.habitOverrides[habitId],
+          ...localSettings.habitOverrides[habitId],
           ...overrideUpdate,
         },
       },
     };
-    setSettings(newSettings);
-    saveSettings(newSettings);
+    setLocalSettings(newSettings);
+    dbSaveSettings(newSettings);
     // Refresh habits
-    setHabits(getResolvedHabits());
+    setHabits(getResolvedHabits(false, dbHabits, newSettings));
   }
 
   function moveHabit(habit: Habit, direction: "up" | "down") {
@@ -82,22 +89,26 @@ export default function SettingsPage() {
   function resetToDefaults() {
     const newSettings: UserSettings = {
       habitOverrides: {},
-      levelUpStates: settings?.levelUpStates ?? {},
+      levelUpStates: localSettings?.levelUpStates ?? {},
       checkinTimes: { morning: "07:00", midday: "13:00", evening: "21:00" },
       notificationSlots: DEFAULT_NOTIFICATION_SLOTS,
       customQuotes: [],
       hiddenQuoteIds: [],
       routineChains: { morning: [], midday: [], evening: [] },
-      customHabits: settings?.customHabits ?? [], // Preserve custom habits on settings reset
+      customHabits: localSettings?.customHabits ?? [], // Preserve custom habits on settings reset
     };
-    setSettings(newSettings);
-    saveSettings(newSettings);
-    setHabits(getResolvedHabits());
+    setLocalSettings(newSettings);
+    dbSaveSettings(newSettings);
+    setHabits(getResolvedHabits(false, dbHabits, newSettings));
   }
 
   function refreshHabits() {
-    setSettings(loadSettings());
-    setHabits(getResolvedHabits());
+    // Custom habit CRUD functions write directly to localStorage,
+    // so re-read settings from localStorage to pick up changes
+    const freshSettings = loadSettingsLocal();
+    setLocalSettings(freshSettings);
+    dbSaveSettings(freshSettings);
+    setHabits(getResolvedHabits(false, dbHabits, freshSettings));
   }
 
   return (
@@ -136,6 +147,9 @@ export default function SettingsPage() {
           </button>
         </div>
       </section>
+
+      {/* Data Sync */}
+      <DataSyncSection />
 
       {/* Notifications & Schedule (unified) */}
       <NotificationSection />
@@ -238,7 +252,7 @@ export default function SettingsPage() {
       )}
 
       {/* Quotes Management */}
-      <QuotesSection settings={settings} onUpdate={(newSettings) => { setSettings(newSettings); saveSettings(newSettings); }} />
+      <QuotesSection settings={localSettings} onUpdate={(newSettings) => { setLocalSettings(newSettings); dbSaveSettings(newSettings); }} />
 
       {/* Reset */}
       <section className="mb-6 space-y-2">
@@ -261,6 +275,139 @@ export default function SettingsPage() {
         </a>
       </div>
     </div>
+  );
+}
+
+// ─── Data Sync Section ──────────────────────────────────────
+function DataSyncSection() {
+  const { user } = useAuth();
+  const [status, setStatus] = useState<"idle" | "uploading" | "downloading" | "success" | "error">("idle");
+  const [message, setMessage] = useState("");
+  const [migrated, setMigrated] = useState(false);
+
+  // Check migration status on mount (must be in useEffect to avoid SSR issues)
+  useEffect(() => {
+    setMigrated(isMigrated());
+  }, [status]);
+
+  async function handleUpload() {
+    if (!user) { setMessage("Sign in first"); return; }
+    setStatus("uploading");
+    setMessage("");
+    try {
+      // Clear migration flag so it re-runs
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("accountability-migrated");
+      }
+      await migrateLocalStorageToSupabase(user.id);
+      setStatus("success");
+      setMigrated(true);
+      setMessage("This device's data has been uploaded to the cloud");
+      setTimeout(() => setStatus("idle"), 4000);
+    } catch (err) {
+      console.error("[sync] Upload failed:", err);
+      setStatus("error");
+      setMessage("Upload failed — check console for details");
+    }
+  }
+
+  async function handleDownload() {
+    if (!user) { setMessage("Sign in first"); return; }
+    setStatus("downloading");
+    setMessage("");
+    try {
+      // Pull fresh state from Supabase and overwrite localStorage
+      const [cloudState, cloudSettings] = await Promise.all([
+        loadStateFromDB(),
+        loadSettingsFromDB(),
+      ]);
+
+      // Write to localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("accountability-state", JSON.stringify(cloudState));
+        localStorage.setItem("accountability-settings", JSON.stringify(cloudSettings));
+        // Mark as migrated so it doesn't try to re-upload
+        localStorage.setItem("accountability-migrated", "true");
+      }
+
+      setStatus("success");
+      setMigrated(true);
+      setMessage("Cloud data downloaded — reloading...");
+      // Reload the page to pick up the new data everywhere
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+      console.error("[sync] Download failed:", err);
+      setStatus("error");
+      setMessage("Download failed — check console for details");
+    }
+  }
+
+  return (
+    <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+      <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+        Data Sync
+      </h2>
+
+      {/* Status */}
+      <div className="flex items-center gap-2 mb-4">
+        <div className={`w-2 h-2 rounded-full ${
+          !user ? "bg-neutral-600" :
+          migrated ? "bg-done" : "bg-later"
+        }`} />
+        <span className="text-xs text-neutral-400">
+          {!user
+            ? "Not signed in — data is local only"
+            : migrated
+              ? "Synced to cloud"
+              : "Not yet synced — tap Upload to sync this device"
+          }
+        </span>
+      </div>
+
+      {/* Buttons */}
+      <div className="space-y-2">
+        <button
+          onClick={handleUpload}
+          disabled={status === "uploading" || status === "downloading" || !user}
+          className={`w-full rounded-lg py-3 text-sm font-medium transition-all active:scale-[0.98] ${
+            status === "uploading"
+              ? "bg-surface-700 text-neutral-500"
+              : "bg-brand hover:bg-brand-dark text-white font-bold disabled:opacity-40"
+          }`}
+        >
+          {status === "uploading" ? "Uploading..." : "Upload This Device's Data"}
+        </button>
+        <p className="text-[10px] text-neutral-600 text-center">
+          Sends all data from this browser to the cloud (overwrites cloud data)
+        </p>
+
+        <button
+          onClick={handleDownload}
+          disabled={status === "uploading" || status === "downloading" || !user}
+          className={`w-full rounded-lg py-3 text-sm font-medium transition-all active:scale-[0.98] ${
+            status === "downloading"
+              ? "bg-surface-700 text-neutral-500"
+              : "bg-surface-700 hover:bg-surface-600 text-neutral-300 font-bold disabled:opacity-40"
+          }`}
+        >
+          {status === "downloading" ? "Downloading..." : "Download From Cloud"}
+        </button>
+        <p className="text-[10px] text-neutral-600 text-center">
+          Pulls the latest data from the cloud to this browser (overwrites local data)
+        </p>
+      </div>
+
+      {/* Status message */}
+      {message && (
+        <div className={`mt-3 rounded-lg px-3 py-2 text-xs text-center ${
+          status === "success" ? "bg-done/10 text-done" :
+          status === "error" ? "bg-missed/10 text-missed" :
+          "bg-surface-700 text-neutral-400"
+        }`}>
+          {message}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -925,9 +1072,9 @@ function NotificationSection() {
 // ─── Notification Schedule Editor ────────────────────────
 function NotificationScheduleEditor() {
   const [slots, setSlots] = useState<NotificationSlot[]>(() => {
-    const settings = loadSettings();
-    return settings.notificationSlots?.length > 0
-      ? settings.notificationSlots
+    const s = loadSettingsLocal();
+    return s.notificationSlots?.length > 0
+      ? s.notificationSlots
       : DEFAULT_NOTIFICATION_SLOTS;
   });
   const [editing, setEditing] = useState(false);
@@ -956,10 +1103,11 @@ function NotificationScheduleEditor() {
   }
 
   function saveSlots(next: NotificationSlot[]) {
-    const settings = loadSettings();
-    settings.notificationSlots = next;
-    settings.checkinTimes = syncCheckinTimesFromSlots(next);
-    saveSettings(settings);
+    const currentSettings = loadSettingsLocal();
+    currentSettings.notificationSlots = next;
+    currentSettings.checkinTimes = syncCheckinTimesFromSlots(next);
+    // Save to localStorage + Supabase
+    saveSettingsToDB(currentSettings);
     // Push updated schedule to service worker immediately
     syncScheduleToServiceWorker();
   }
@@ -1130,7 +1278,7 @@ function ResetDataButton() {
   const [fullResetDone, setFullResetDone] = useState(false);
 
   function handleRecalculateStreaks() {
-    const state = loadState();
+    const state = loadStateLocal();
     const allHabits = getResolvedHabits();
     const habitSlugsById: Record<string, string> = {};
     for (const h of allHabits) {
@@ -1138,7 +1286,7 @@ function ResetDataButton() {
     }
     const calculatedStreaks = recalculateStreaks(state, habitSlugsById);
     state.streaks = calculatedStreaks;
-    saveState(state);
+    saveStateToDB(state);
 
     const nonZero = Object.entries(calculatedStreaks).filter(([, v]) => v > 0);
     setRecalcMessage(
@@ -1151,12 +1299,12 @@ function ResetDataButton() {
   }
 
   function handleStreakReset() {
-    const state = loadState();
+    const state = loadStateLocal();
     // Reset all individual habit streaks to 0
     state.streaks = {};
     // Reset bare minimum streak to 0 (day 1 starts fresh)
     state.bareMinimumStreak = 0;
-    saveState(state);
+    saveStateToDB(state);
     setStreakResetDone(true);
     setTimeout(() => setStreakResetDone(false), 3000);
   }
@@ -1176,7 +1324,7 @@ function ResetDataButton() {
       activeSprint: null,
       sprintHistory: [],
     };
-    saveState(freshState);
+    saveStateToDB(freshState);
 
     if (typeof window !== "undefined") {
       localStorage.removeItem("accountability-gym");

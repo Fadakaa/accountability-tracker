@@ -5,31 +5,33 @@ import { loadState, saveState, getToday, getLevelForXP } from "@/lib/store";
 import type { LocalState, SprintData, DayLog } from "@/lib/store";
 import type { SprintIntensity } from "@/types/database";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
+import { useDB } from "@/hooks/useDB";
 
 // ─── Types ──────────────────────────────────────────────────
 type Phase = "activation" | "dashboard" | "summary";
 
 // ─── Component ──────────────────────────────────────────────
 export default function SprintPage() {
+  const { state: dbState, settings, dbHabits, loading, saveState: dbSaveState, refresh } = useDB();
   const [state, setState] = useState<LocalState | null>(null);
   const [phase, setPhase] = useState<Phase>("activation");
   const [completedSprint, setCompletedSprint] = useState<SprintData | null>(null);
 
-  // Load state on mount
+  // Sync from useDB on load
   useEffect(() => {
-    const s = loadState();
-    setState(s);
-    if (s.activeSprint && s.activeSprint.status === "active") {
+    if (loading) return;
+    setState(dbState);
+    if (dbState.activeSprint && dbState.activeSprint.status === "active") {
       setPhase("dashboard");
     }
-  }, []);
+  }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh state helper
   const refreshState = useCallback(() => {
     setState(loadState());
   }, []);
 
-  if (!state) return null;
+  if (loading || !state) return null;
 
   if (phase === "summary" && completedSprint) {
     return (
@@ -487,7 +489,7 @@ function SprintDashboard({
         </h2>
         <div className="grid grid-cols-2 gap-2 text-sm">
           {["prayer", "bible-reading", "training", "journal"].map((slug) => {
-            const habit = getResolvedHabits().find((h) => h.slug === slug);
+            const habit = getResolvedHabits().find((h: { slug: string }) => h.slug === slug);
             return (
               <div key={slug} className="flex items-center gap-1 text-neutral-300">
                 <span>{habit?.icon ?? "🔥"}</span>
