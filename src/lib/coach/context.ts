@@ -22,11 +22,12 @@ interface CoachContextInput {
   gymSessions?: { date: string; trainingType: string; muscleGroup: string | null; durationMinutes: number | null; rpe: number | null }[];
   showingUp?: { totalOpens: number; uniqueDays: number; firstOpenDate: string };
   experiments?: CoachExperiment[];
+  pastConversationSummaries?: Array<{ summary: string; createdAt: string }>;
 }
 
 /** Build a compressed text summary of all user data for the AI coach */
 export function buildCoachContext(input: CoachContextInput): string {
-  const { state, settings, habits, gymSessions, showingUp, experiments } = input;
+  const { state, settings, habits, gymSessions, showingUp, experiments, pastConversationSummaries } = input;
   const lines: string[] = [];
   const today = new Date().toISOString().slice(0, 10);
 
@@ -193,6 +194,12 @@ export function buildCoachContext(input: CoachContextInput): string {
     lines.push("");
   }
 
+  // ── Forward Intention Accountability (placed early for prominence) ──
+  const intentionCheck = buildIntentionAccountability(state, habits, today);
+  if (intentionCheck) {
+    lines.push(intentionCheck);
+  }
+
   // ── Reflections ──
   const reflections = state.reflections ?? [];
   if (reflections.length > 0) {
@@ -204,6 +211,17 @@ export function buildCoachContext(input: CoachContextInput): string {
       if (r.forwardIntention) {
         lines.push(`Forward intention: "${r.forwardIntention}"`);
       }
+    }
+    lines.push("");
+  }
+
+  // ── Past Coaching Sessions ──
+  const summaries = pastConversationSummaries ?? [];
+  if (summaries.length > 0) {
+    lines.push("## PAST COACHING SESSIONS");
+    for (const s of summaries.slice(0, 5)) {
+      const dateStr = new Date(s.createdAt).toISOString().slice(0, 10);
+      lines.push(`[${dateStr}] ${s.summary}`);
     }
     lines.push("");
   }
@@ -252,6 +270,96 @@ export function buildCoachContext(input: CoachContextInput): string {
       lines.push("");
     }
   }
+
+  return lines.join("\n");
+}
+
+// ─── Forward Intention Accountability ─────────────────────
+
+/**
+ * Extract the most recent forward intention and compare it against
+ * this week's habit/training/measured data. Returns a structured text
+ * block for the AI context, or null if no intention exists.
+ */
+function buildIntentionAccountability(
+  state: LocalState,
+  habits: Habit[],
+  today: string,
+): string | null {
+  const reflections = state.reflections ?? [];
+  if (reflections.length === 0) return null;
+
+  // Find the most recent reflection that has a forward intention
+  // Reflections are sorted newest-first from the load path
+  const withIntention = reflections.find(r => r.forwardIntention?.trim());
+  if (!withIntention || !withIntention.forwardIntention) return null;
+
+  const intention = withIntention.forwardIntention.trim();
+  const intentionDate = withIntention.date;
+
+  const weekLogs = getWeekLogs(state.logs, today);
+
+  const lines: string[] = [];
+  lines.push("## FORWARD INTENTION CHECK");
+  lines.push(`Set on ${intentionDate}: "${intention}"`);
+  lines.push("");
+
+  // Try to match the intention text against known habit names/slugs
+  const intentionLower = intention.toLowerCase();
+  const activeHabits = habits.filter(h => h.is_active);
+  const matched: string[] = [];
+
+  for (const h of activeHabits) {
+    const nameWords = h.name.toLowerCase().split(/\s+/);
+    const slugWords = h.slug.toLowerCase().split("-");
+    const allTerms = [...nameWords, ...slugWords];
+
+    // Check if any habit word (3+ chars) appears in the intention
+    const isMatch = allTerms.some(word =>
+      word.length >= 3 && intentionLower.includes(word)
+    );
+
+    if (isMatch) {
+      if (h.category === "bad") {
+        let count = 0, minutes = 0;
+        for (const log of weekLogs) {
+          const entry = log.badEntries[h.id];
+          if (entry?.occurred) { count++; minutes += entry.durationMinutes ?? 0; }
+        }
+        const display = h.unit === "minutes"
+          ? `${minutes}m across ${count} days`
+          : `${count} days this week`;
+        matched.push(`- ${h.icon || ""} ${h.name}: ${display}`);
+      } else if (h.category === "measured") {
+        let total = 0, count = 0;
+        for (const log of weekLogs) {
+          const val = log.entries[h.id]?.value;
+          if (val != null && val > 0) { total += val; count++; }
+        }
+        matched.push(`- ${h.icon || ""} ${h.name}: ${total} total across ${count} days`);
+      } else {
+        // Binary habit
+        let done = 0, missed = 0;
+        for (const log of weekLogs) {
+          const entry = log.entries[h.id];
+          if (entry?.status === "done") done++;
+          else if (entry?.status === "missed") missed++;
+        }
+        matched.push(`- ${h.icon || ""} ${h.name}: Done ${done}/${weekLogs.length} days (missed ${missed})`);
+      }
+    }
+  }
+
+  if (matched.length > 0) {
+    lines.push("Relevant data this week:");
+    lines.push(...matched);
+  } else {
+    lines.push("(No direct habit match found — interpret the intention against the full data above)");
+  }
+
+  lines.push("");
+  lines.push("IMPORTANT: Address this intention directly in your analysis. Did they follow through? Be specific.");
+  lines.push("");
 
   return lines.join("\n");
 }

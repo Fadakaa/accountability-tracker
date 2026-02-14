@@ -28,6 +28,12 @@ import {
 } from "@/lib/store";
 import { XP_VALUES } from "@/lib/habits";
 import { saveAdminTaskToDB } from "@/lib/db";
+import {
+  loadRecentConversationSummaries,
+  saveConversation,
+  generateConversationSummary,
+} from "@/lib/coach/conversations";
+import type { ConversationSummary } from "@/lib/coach/conversations";
 import { getResolvedHabits, getHabitsWithHistory } from "@/lib/resolvedHabits";
 import { getFlameIcon } from "@/lib/habits";
 import { isBinaryLike } from "@/types/database";
@@ -1072,6 +1078,36 @@ function AnalysisTab({
   const [followUp, setFollowUp] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // ── Conversation persistence ──
+  const [conversationId] = useState(() => crypto.randomUUID());
+  const [pastSummaries, setPastSummaries] = useState<ConversationSummary[]>([]);
+  const conversationCreatedAt = useRef(new Date().toISOString());
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load past conversation summaries on mount
+  useEffect(() => {
+    loadRecentConversationSummaries(5).then(setPastSummaries);
+  }, []);
+
+  // Auto-save conversation (debounced) when messages change
+  useEffect(() => {
+    if (messages.length < 2) return; // Need at least one exchange
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      const summary = generateConversationSummary(messages);
+      saveConversation({
+        id: conversationId,
+        messages: messages.map(m => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
+        summary,
+        createdAt: conversationCreatedAt.current,
+        updatedAt: new Date().toISOString(),
+      });
+    }, 3000); // 3-second debounce
+
+    return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); };
+  }, [messages, conversationId]);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -1094,6 +1130,7 @@ function AnalysisTab({
           muscleGroup: s.muscleGroup, durationMinutes: s.durationMinutes, rpe: s.rpe,
         })),
         showingUp, experiments,
+        pastConversationSummaries: pastSummaries,
       });
 
       const systemMessage = COACH_SYSTEM_PROMPT + "\n\n---\n\n" + context;
@@ -1132,7 +1169,7 @@ function AnalysisTab({
     } finally {
       setLoading(false);
     }
-  }, [state, settings, habits, messages]);
+  }, [state, settings, habits, messages, pastSummaries]);
 
   async function handleAnalyse() {
     await callCoach("Analyse my current data and tell me what you see.", true);
