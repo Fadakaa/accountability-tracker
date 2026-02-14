@@ -304,7 +304,7 @@ export function getToday(): string {
 }
 
 /** Returns the active sprint context — intensity rules for check-in flow */
-export function getSprintContext(): {
+export function getSprintContext(stateArg?: LocalState): {
   active: boolean;
   intensity: SprintIntensity | null;
   name: string | null;
@@ -313,7 +313,7 @@ export function getSprintContext(): {
   targetMultiplier: number;     // moderate: 0.75, intense: 0.5, critical: 0.5
   protectStreaks: boolean;       // critical: don't break streaks on miss
 } {
-  const state = loadState();
+  const state = stateArg ?? loadState();
   const sprint = state.activeSprint;
   if (!sprint || sprint.status !== "active") {
     return { active: false, intensity: null, name: null, bareMinimumOnly: false, singleCheckin: false, targetMultiplier: 1, protectStreaks: false };

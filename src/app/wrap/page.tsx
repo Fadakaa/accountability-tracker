@@ -85,7 +85,7 @@ export default function WrapPage() {
     setTomorrowTasks(loadAdminTasks(getTomorrowDate()));
   }
 
-  const cards = state ? buildCards(state, reflectionAnswer, setReflectionAnswer, forwardIntention, setForwardIntention, tomorrowTasks, newTomorrowText, setNewTomorrowText, handleAddTomorrowTask, handleRemoveTomorrowTask) : [];
+  const cards = state ? buildCards(state, reflectionAnswer, setReflectionAnswer, forwardIntention, setForwardIntention, tomorrowTasks, newTomorrowText, setNewTomorrowText, handleAddTomorrowTask, handleRemoveTomorrowTask, dbHabits) : [];
 
   const goNext = useCallback(() => {
     if (currentCard < cards.length - 1) {
@@ -275,11 +275,12 @@ function buildCards(
   setNewTomorrowText: (v: string) => void,
   onAddTomorrowTask: () => void,
   onRemoveTomorrowTask: (taskId: string) => void,
+  dbHabits?: Habit[] | null,
 ): WrapCard[] {
   const cards: WrapCard[] = [];
   const weekLogs = getWeekLogs(state);
   const prevWeekLogs = getPrevWeekLogs(state);
-  const habits = getHabitsWithHistory();
+  const habits = getHabitsWithHistory(dbHabits, state.logs);
   const activeHabits = habits.filter((h) => h.is_active);
   const binaryHabits = activeHabits.filter((h) => isBinaryLike(h.category));
   const badHabits = activeHabits.filter((h) => h.category === "bad");

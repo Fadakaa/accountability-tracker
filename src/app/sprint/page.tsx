@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { loadState, saveState, getToday, getLevelForXP } from "@/lib/store";
+import { getToday, getLevelForXP } from "@/lib/store";
 import type { LocalState, SprintData, DayLog } from "@/lib/store";
 import type { SprintIntensity } from "@/types/database";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -26,10 +26,15 @@ export default function SprintPage() {
     }
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh state helper
-  const refreshState = useCallback(() => {
-    setState(loadState());
-  }, []);
+  // Refresh state helper — re-read from useDB
+  const refreshState = useCallback(async () => {
+    await refresh();
+  }, [refresh]);
+
+  // Keep local state in sync with dbState
+  useEffect(() => {
+    if (!loading) setState(dbState);
+  }, [dbState, loading]);
 
   if (loading || !state) return null;
 
@@ -40,7 +45,6 @@ export default function SprintPage() {
         state={state}
         onNewSprint={() => {
           setCompletedSprint(null);
-          setState(loadState()); // Refresh state for activation screen
           setPhase("activation");
         }}
       />
@@ -52,6 +56,9 @@ export default function SprintPage() {
       <SprintDashboard
         state={state}
         sprint={state.activeSprint}
+        dbSaveState={dbSaveState}
+        dbHabits={dbHabits}
+        settings={settings}
         onRefresh={refreshState}
         onEndSprint={(archived) => {
           setCompletedSprint(archived);
@@ -63,8 +70,10 @@ export default function SprintPage() {
 
   return (
     <SprintActivation
-      onActivated={() => {
-        refreshState();
+      state={state}
+      dbSaveState={dbSaveState}
+      onActivated={async () => {
+        await refreshState();
         setPhase("dashboard");
       }}
     />
@@ -72,24 +81,22 @@ export default function SprintPage() {
 }
 
 // ─── Sprint Activation ──────────────────────────────────────
-function SprintActivation({ onActivated }: { onActivated: () => void }) {
+function SprintActivation({ state, dbSaveState, onActivated }: {
+  state: LocalState;
+  dbSaveState: (s: LocalState) => Promise<void>;
+  onActivated: () => void;
+}) {
   const [name, setName] = useState("");
   const [deadline, setDeadline] = useState("");
   const [intensity, setIntensity] = useState<SprintIntensity>("moderate");
 
-  // Past sprints
-  const [pastSprints, setPastSprints] = useState<SprintData[]>([]);
-  useEffect(() => {
-    const s = loadState();
-    setPastSprints(s.sprintHistory);
-  }, []);
+  const pastSprints = state.sprintHistory ?? [];
 
   const canActivate = name.trim().length > 0 && deadline.length > 0;
 
-  function handleActivate() {
+  async function handleActivate() {
     if (!canActivate) return;
 
-    const state = loadState();
     const sprint: SprintData = {
       id: crypto.randomUUID(),
       name: name.trim(),
@@ -102,8 +109,8 @@ function SprintActivation({ onActivated }: { onActivated: () => void }) {
       completedAt: null,
     };
 
-    state.activeSprint = sprint;
-    saveState(state);
+    const updated = { ...state, activeSprint: sprint };
+    await dbSaveState(updated);
     onActivated();
   }
 
@@ -247,11 +254,17 @@ function SprintActivation({ onActivated }: { onActivated: () => void }) {
 function SprintDashboard({
   state,
   sprint,
+  dbSaveState,
+  dbHabits,
+  settings,
   onRefresh,
   onEndSprint,
 }: {
   state: LocalState;
   sprint: SprintData;
+  dbSaveState: (s: LocalState) => Promise<void>;
+  dbHabits: import("@/types/database").Habit[] | null;
+  settings: import("@/lib/store").UserSettings;
   onRefresh: () => void;
   onEndSprint: (archived: SprintData) => void;
 }) {
@@ -334,32 +347,32 @@ function SprintDashboard({
     persistTasks(updated);
   }
 
-  function persistTasks(updatedTasks: SprintData["tasks"]) {
-    const freshState = loadState();
-    if (freshState.activeSprint) {
-      freshState.activeSprint.tasks = updatedTasks;
-      saveState(freshState);
+  async function persistTasks(updatedTasks: SprintData["tasks"]) {
+    if (state.activeSprint) {
+      const updated = {
+        ...state,
+        activeSprint: { ...state.activeSprint, tasks: updatedTasks },
+      };
+      await dbSaveState(updated);
       onRefresh();
     }
   }
 
-  function handleEndSprint() {
-    // Use the sprint PROP (already in memory) — don't rely on re-reading localStorage
-    // because a previous failed attempt may have already nulled activeSprint there
+  async function handleEndSprint() {
     const archived: SprintData = {
       ...sprint,
-      tasks: tasks, // use latest local task state
+      tasks: tasks,
       status: "completed",
       completedAt: new Date().toISOString(),
     };
 
-    // Save: archive sprint + clear active
-    const freshState = loadState();
-    freshState.sprintHistory.push(archived);
-    freshState.activeSprint = null;
-    saveState(freshState);
+    const updated = {
+      ...state,
+      sprintHistory: [...(state.sprintHistory ?? []), archived],
+      activeSprint: null,
+    };
+    await dbSaveState(updated);
 
-    // Transition to summary
     setShowConfirm(false);
     onEndSprint(archived);
   }
@@ -489,7 +502,7 @@ function SprintDashboard({
         </h2>
         <div className="grid grid-cols-2 gap-2 text-sm">
           {["prayer", "bible-reading", "training", "journal"].map((slug) => {
-            const habit = getResolvedHabits().find((h: { slug: string }) => h.slug === slug);
+            const habit = getResolvedHabits(false, dbHabits, settings).find((h: { slug: string }) => h.slug === slug);
             return (
               <div key={slug} className="flex items-center gap-1 text-neutral-300">
                 <span>{habit?.icon ?? "🔥"}</span>

@@ -85,7 +85,7 @@ function buildSkillTree(resolvedHabits: ResolvedHabit[]): SkillBranch[] {
 
 // ─── Component ──────────────────────────────────────────────
 export default function SkillTreePage() {
-  const { state, settings, dbHabits, loading, refresh } = useDB();
+  const { state, settings, dbHabits, loading, saveState: dbSaveState, saveSettings: dbSaveSettings } = useDB();
   const [suggestions, setSuggestions] = useState<LevelSuggestion[]>([]);
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
 
@@ -93,33 +93,35 @@ export default function SkillTreePage() {
   const branches = buildSkillTree(resolvedHabits);
 
   useEffect(() => {
-    // Show ALL suggestions — level_up and drop_back
-    setSuggestions(evaluateLevelSuggestions());
-  }, [loading]);
+    if (!loading) {
+      setSuggestions(evaluateLevelSuggestions(state, settings, dbHabits ?? undefined));
+    }
+  }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handleAcceptLevelUp(habitId: string) {
-    acceptLevelUp(habitId);
-    refresh();
+  async function handleAcceptLevelUp(habitId: string) {
+    const result = acceptLevelUp(habitId, settings, state, dbHabits ?? undefined);
+    await Promise.all([dbSaveSettings(result.settings), dbSaveState(result.state)]);
     setDismissedSuggestions((prev) => new Set(prev).add(habitId));
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }
 
-  function handleDeclineLevelUp(habitId: string) {
-    declineLevelUp(habitId);
+  async function handleDeclineLevelUp(habitId: string) {
+    const updatedSettings = declineLevelUp(habitId, settings);
+    await dbSaveSettings(updatedSettings);
     setDismissedSuggestions((prev) => new Set(prev).add(habitId));
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }
 
-  function handleAcceptDropBack(habitId: string) {
-    acceptDropBack(habitId);
-    refresh();
+  async function handleAcceptDropBack(habitId: string) {
+    const updatedSettings = acceptDropBack(habitId, settings);
+    await dbSaveSettings(updatedSettings);
     setDismissedSuggestions((prev) => new Set(prev).add(habitId));
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }
 
-  function handleDeclineDropBack(habitId: string) {
-    // Declining a drop-back just dismisses it — same as declining a level-up (suppresses for 7 days)
-    declineLevelUp(habitId);
+  async function handleDeclineDropBack(habitId: string) {
+    const updatedSettings = declineLevelUp(habitId, settings);
+    await dbSaveSettings(updatedSettings);
     setDismissedSuggestions((prev) => new Set(prev).add(habitId));
     setSuggestions((prev) => prev.filter((s) => s.habitId !== habitId));
   }

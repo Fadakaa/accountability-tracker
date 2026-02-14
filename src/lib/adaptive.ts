@@ -4,9 +4,11 @@
 
 import { getResolvedHabits } from "./resolvedHabits";
 import { loadState, saveState, loadSettings, saveSettings } from "./store";
+import type { LocalState, UserSettings } from "./store";
 import { HABIT_LEVELS, XP_VALUES } from "./habits";
 import type { DayLog } from "./store";
 import { isBinaryLike } from "@/types/database";
+import type { Habit } from "@/types/database";
 
 export interface LevelSuggestion {
   habitId: string;
@@ -18,10 +20,14 @@ export interface LevelSuggestion {
   type: "level_up" | "drop_back";
 }
 
-export function evaluateLevelSuggestions(): LevelSuggestion[] {
-  const state = loadState();
-  const settings = loadSettings();
-  const habits = getResolvedHabits();
+export function evaluateLevelSuggestions(
+  stateArg?: LocalState,
+  settingsArg?: UserSettings,
+  habitsArg?: Habit[],
+): LevelSuggestion[] {
+  const state = stateArg ?? loadState();
+  const settings = settingsArg ?? loadSettings();
+  const habits = habitsArg ? getResolvedHabits(false, habitsArg, settings) : getResolvedHabits();
   const today = new Date().toISOString().slice(0, 10);
   const suggestions: LevelSuggestion[] = [];
 
@@ -126,70 +132,107 @@ function daysBetween(from: string, to: string): number {
   return Math.floor((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export function acceptLevelUp(habitId: string): void {
-  const settings = loadSettings();
-  const habits = getResolvedHabits();
+/**
+ * Accept a level-up. Returns updated { settings, state } for the caller to persist.
+ * Also writes to localStorage as a fallback.
+ */
+export function acceptLevelUp(
+  habitId: string,
+  settingsArg?: UserSettings,
+  stateArg?: LocalState,
+  habitsArg?: Habit[],
+): { settings: UserSettings; state: LocalState } {
+  const settings = settingsArg ? { ...settingsArg } : loadSettings();
+  const habits = habitsArg ? getResolvedHabits(false, habitsArg, settings) : getResolvedHabits();
   const habit = habits.find((h) => h.id === habitId);
-  if (!habit) return;
 
-  const today = new Date().toISOString().slice(0, 10);
-  const newLevel = habit.current_level + 1;
+  if (habit) {
+    const today = new Date().toISOString().slice(0, 10);
+    const newLevel = habit.current_level + 1;
 
-  // Update habit override
-  const existing = settings.habitOverrides[habitId] ?? {};
-  settings.habitOverrides[habitId] = { ...existing, current_level: newLevel };
+    const existing = settings.habitOverrides[habitId] ?? {};
+    settings.habitOverrides = {
+      ...settings.habitOverrides,
+      [habitId]: { ...existing, current_level: newLevel },
+    };
 
-  // Track level-up state
-  settings.levelUpStates[habitId] = {
-    lastSuggestionDate: today,
-    declinedUntil: null,
-    levelUpDate: today,
-    previousLevel: habit.current_level,
-  };
+    settings.levelUpStates = {
+      ...settings.levelUpStates,
+      [habitId]: {
+        lastSuggestionDate: today,
+        declinedUntil: null,
+        levelUpDate: today,
+        previousLevel: habit.current_level,
+      },
+    };
+  }
 
   saveSettings(settings);
 
-  // Award XP
-  const state = loadState();
+  const state = stateArg ? { ...stateArg } : loadState();
   state.totalXp += XP_VALUES.LEVEL_UP_ACCEPTED;
   state.currentLevel = getLevelForXPQuick(state.totalXp);
   saveState(state);
+
+  return { settings, state };
 }
 
-export function declineLevelUp(habitId: string): void {
-  const settings = loadSettings();
+/**
+ * Decline a level-up. Returns updated settings for the caller to persist.
+ */
+export function declineLevelUp(
+  habitId: string,
+  settingsArg?: UserSettings,
+): UserSettings {
+  const settings = settingsArg ? { ...settingsArg } : loadSettings();
   const today = new Date();
   const askAgain = new Date(today);
   askAgain.setDate(askAgain.getDate() + 7);
 
-  settings.levelUpStates[habitId] = {
-    ...settings.levelUpStates[habitId],
-    lastSuggestionDate: today.toISOString().slice(0, 10),
-    declinedUntil: askAgain.toISOString().slice(0, 10),
-    levelUpDate: settings.levelUpStates[habitId]?.levelUpDate ?? null,
-    previousLevel: settings.levelUpStates[habitId]?.previousLevel ?? null,
+  settings.levelUpStates = {
+    ...settings.levelUpStates,
+    [habitId]: {
+      ...settings.levelUpStates[habitId],
+      lastSuggestionDate: today.toISOString().slice(0, 10),
+      declinedUntil: askAgain.toISOString().slice(0, 10),
+      levelUpDate: settings.levelUpStates[habitId]?.levelUpDate ?? null,
+      previousLevel: settings.levelUpStates[habitId]?.previousLevel ?? null,
+    },
   };
 
   saveSettings(settings);
+  return settings;
 }
 
-export function acceptDropBack(habitId: string): void {
-  const settings = loadSettings();
+/**
+ * Accept a drop-back. Returns updated settings for the caller to persist.
+ */
+export function acceptDropBack(
+  habitId: string,
+  settingsArg?: UserSettings,
+): UserSettings {
+  const settings = settingsArg ? { ...settingsArg } : loadSettings();
   const levelState = settings.levelUpStates[habitId];
   const prevLevel = levelState?.previousLevel ?? 1;
 
   const existing = settings.habitOverrides[habitId] ?? {};
-  settings.habitOverrides[habitId] = { ...existing, current_level: prevLevel };
+  settings.habitOverrides = {
+    ...settings.habitOverrides,
+    [habitId]: { ...existing, current_level: prevLevel },
+  };
 
-  // Reset level-up tracking
-  settings.levelUpStates[habitId] = {
-    lastSuggestionDate: null,
-    declinedUntil: null,
-    levelUpDate: null,
-    previousLevel: null,
+  settings.levelUpStates = {
+    ...settings.levelUpStates,
+    [habitId]: {
+      lastSuggestionDate: null,
+      declinedUntil: null,
+      levelUpDate: null,
+      previousLevel: null,
+    },
   };
 
   saveSettings(settings);
+  return settings;
 }
 
 // Quick level lookup (avoids importing getLevelForXP to prevent circular deps)

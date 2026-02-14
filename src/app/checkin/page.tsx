@@ -53,7 +53,7 @@ export default function CheckinPage() {
   const [streaks, setStreaks] = useState<Record<string, number>>({});
 
   // Sprint context — affects which habits are shown and how
-  const sprint = useMemo(() => getSprintContext(), []);
+  const sprint = useMemo(() => getSprintContext(dbState), [dbState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Admin tasks state
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
@@ -125,7 +125,7 @@ export default function CheckinPage() {
 
     // Check if current stack is already submitted
     checkStackLock(activeStack, dbState);
-  }, [activeStack, loading]);
+  }, [activeStack, loading, dbState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function checkStackLock(stack: HabitStack, state?: typeof dbState) {
     const s = state ?? dbState;
