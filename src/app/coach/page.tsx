@@ -206,13 +206,15 @@ function CoachPage() {
     setReviewState(dbState);
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading) return null;
-
-  const habits = getResolvedHabits(false, dbHabits, settings);
+  // Resolve habits (safe even while loading — returns defaults)
+  const habits = useMemo(
+    () => getResolvedHabits(false, dbHabits, settings),
+    [dbHabits, settings],
+  );
 
   // Compute insight count for collapsed badge
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const insightCount = useMemo(() => {
+    if (loading) return 0;
     let count = 0;
     const streaks = Object.entries(dbState.streaks).filter(([, v]) => v > 0);
     if (streaks.length > 0) count++;
@@ -228,7 +230,9 @@ function CoachPage() {
       if (recent14.length >= 5 && done / Math.min(recent14.length, 14) < 0.4) count++;
     }
     return count;
-  }, [dbState, habits]);
+  }, [dbState, habits, loading]);
+
+  if (loading) return null;
 
   return (
     <div className="flex flex-col min-h-screen bg-surface-900">
