@@ -11,6 +11,29 @@ const DEFERRED_KEY = "accountability-deferred";
 const ADMIN_KEY = "accountability-admin";
 const SHOWING_UP_KEY = "accountability-showing-up";
 
+// All app-specific localStorage keys (for clearing on sign-out)
+const ALL_STORAGE_KEYS = [
+  STORAGE_KEY,
+  GYM_STORAGE_KEY,
+  GYM_ROUTINES_KEY,
+  SETTINGS_KEY,
+  DEFERRED_KEY,
+  ADMIN_KEY,
+  SHOWING_UP_KEY,
+  "accountability-migrated",
+  "accountability-habit-id-map",
+  "accountability-notifications",
+  "accountability-sync-queue",
+];
+
+/** Wipe all app data from localStorage (called on sign-out to prevent data leaking between users) */
+export function clearAllLocalData() {
+  if (typeof window === "undefined") return;
+  for (const key of ALL_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+  }
+}
+
 // ─── Deferred Habits (temporary reschedule for today only) ───
 export interface DeferredHabit {
   habitId: string;
@@ -673,6 +696,35 @@ export interface UserSettings {
   hiddenQuoteIds: string[];
   routineChains: Record<HabitStack, ChainItem[]>;
   customHabits: Habit[];
+  coachSettings?: CoachSettings;
+}
+
+// ─── Coach Settings ─────────────────────────────────────────
+export type CoachProvider = "anthropic" | "openai" | "google";
+
+export interface CoachSettings {
+  provider: CoachProvider | null;
+  model?: string; // e.g. "claude-sonnet-4-20250514", "gpt-4o-mini", "gemini-2.0-flash"
+}
+
+export type ExperimentScale = "small" | "medium" | "large";
+export type ExperimentComplexity = "simple" | "complex";
+export type ExperimentStatus = "suggested" | "active" | "completed" | "skipped";
+
+export interface CoachExperiment {
+  id: string;
+  title: string;
+  description: string;
+  scale: ExperimentScale;
+  complexity: ExperimentComplexity;
+  status: ExperimentStatus;
+  durationDays: number;
+  startDate: string | null;
+  endDate: string | null;
+  outcome: string | null;       // user's reflection on result
+  coachAnalysis: string | null;  // AI's analysis of the experiment result
+  createdAt: string;
+  updatedAt: string;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {

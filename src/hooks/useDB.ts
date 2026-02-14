@@ -21,12 +21,15 @@ import {
   saveState,
   loadSettings,
   saveSettings,
+  recalculateStreaks,
 } from "@/lib/store";
 import type { LocalState, UserSettings, DayLog } from "@/lib/store";
+import { getResolvedHabits } from "@/lib/resolvedHabits";
 import type { Habit, HabitLevel } from "@/types/database";
 import type { SyncStatus } from "@/lib/sync/types";
 import { isOnline, onOnlineChange } from "@/lib/sync/online";
 import { isMigrated, migrateLocalStorageToSupabase } from "@/lib/sync/migration";
+import { clearAllLocalData } from "@/lib/store";
 
 interface UseDBResult {
   // Data
@@ -45,6 +48,8 @@ interface UseDBResult {
   saveDayLog: (dayLog: DayLog, fullState: LocalState) => Promise<void>;
   saveSettings: (settings: UserSettings) => Promise<void>;
   refresh: () => Promise<void>;
+  /** Recalculate streaks from log history and persist if changed. Call after write-path operations. */
+  recalcStreaks: () => void;
 }
 
 const DEFAULT_STATE: LocalState = {
@@ -68,6 +73,31 @@ const DEFAULT_SETTINGS: UserSettings = {
   customHabits: [],
 };
 
+/**
+ * Single source of truth for streak recalculation.
+ * Called once after data loads in useDB and after write-path operations.
+ * Pages should NEVER recalculate streaks independently — they read state.streaks.
+ */
+function ensureStreaksConsistent(
+  currentState: LocalState,
+  habits: Habit[] | null,
+  currentSettings: UserSettings,
+): { state: LocalState; changed: boolean } {
+  const hasData = currentState.logs.length > 0 || currentState.totalXp > 0;
+  if (!hasData) return { state: currentState, changed: false };
+
+  const allHabits = getResolvedHabits(false, habits, currentSettings);
+  const habitSlugsById: Record<string, string> = {};
+  for (const h of allHabits) {
+    habitSlugsById[h.id] = h.slug;
+  }
+  const newStreaks = recalculateStreaks(currentState, habitSlugsById);
+  const changed = JSON.stringify(newStreaks) !== JSON.stringify(currentState.streaks);
+  if (!changed) return { state: currentState, changed: false };
+
+  return { state: { ...currentState, streaks: newStreaks }, changed: true };
+}
+
 export function useDB(): UseDBResult {
   const { user } = useAuth();
   const [state, setState] = useState<LocalState>(() => loadState());
@@ -77,12 +107,23 @@ export function useDB(): UseDBResult {
   const [loading, setLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const loadedRef = useRef(false);
+  const prevUserIdRef = useRef<string | null>(null);
 
   // ─── Initial load ──────────────────────────────────────
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setSyncStatus(isOnline() && user ? "syncing" : "offline");
+
+    // Detect user switch — clear stale localStorage so new user starts fresh
+    const currentUserId = user?.id ?? null;
+    if (prevUserIdRef.current !== null && currentUserId !== prevUserIdRef.current) {
+      console.log("[useDB] User changed — clearing stale localStorage data");
+      clearAllLocalData();
+      setState(DEFAULT_STATE);
+      setSettings(DEFAULT_SETTINGS);
+    }
+    prevUserIdRef.current = currentUserId;
 
     try {
       // Run migration if needed (first authenticated load)
@@ -105,16 +146,42 @@ export function useDB(): UseDBResult {
         loadSettingsFromDB(),
       ]);
 
-      setState(newState);
+      // Safety: never overwrite existing data with empty state
+      // This prevents race conditions where Supabase returns empty before data loads
+      const currentState = loadState(); // fresh read from localStorage
+      const currentHasData = currentState.logs.length > 0 || currentState.totalXp > 0;
+      const newHasData = newState.logs.length > 0 || newState.totalXp > 0;
+
+      if (currentHasData && !newHasData) {
+        console.warn("[useDB] Refusing to overwrite existing data with empty state — keeping current data");
+        setState(currentState);
+      } else {
+        setState(newState);
+      }
       setSettings(newSettings);
 
       // Load habits from DB
+      let loadedHabits: Habit[] | null = null;
       if (user) {
         const habitsResult = await loadHabitsFromDB();
         if (habitsResult) {
+          loadedHabits = habitsResult.habits;
           setDbHabits(habitsResult.habits);
           setDbHabitLevels(habitsResult.levels);
         }
+      }
+
+      // ─── Single source of truth: recalculate streaks once here ───
+      // All pages read state.streaks from useDB — no page should recalculate independently.
+      const finalState = currentHasData && !newHasData ? currentState : newState;
+      const { state: streakState, changed: streaksChanged } = ensureStreaksConsistent(
+        finalState, loadedHabits, newSettings,
+      );
+      if (streaksChanged) {
+        setState(streakState);
+        saveState(streakState); // persist corrected streaks
+        // Fire-and-forget Supabase sync for the corrected streaks
+        saveStateToDB(streakState).catch(() => {});
       }
 
       setSyncStatus(isOnline() && user ? "idle" : "offline");
@@ -155,7 +222,15 @@ export function useDB(): UseDBResult {
           }
           // Refresh data from Supabase
           const newState = await loadStateFromDB();
-          setState(newState);
+          // Safety: don't overwrite good data with empty data on reconnect
+          const currentLocal = loadState();
+          const localHasData = currentLocal.logs.length > 0 || currentLocal.totalXp > 0;
+          const remoteHasData = newState.logs.length > 0 || newState.totalXp > 0;
+          if (localHasData && !remoteHasData) {
+            console.warn("[useDB] Reconnect: refusing to overwrite local data with empty Supabase data");
+          } else {
+            setState(newState);
+          }
           setSyncStatus("idle");
         } catch {
           setSyncStatus("error");
@@ -198,6 +273,18 @@ export function useDB(): UseDBResult {
     }
   }, []);
 
+  // ─── Recalculate streaks (call after write-path operations) ──
+  const handleRecalcStreaks = useCallback(() => {
+    setState((prev) => {
+      const { state: updated, changed } = ensureStreaksConsistent(prev, dbHabits, settings);
+      if (changed) {
+        saveState(updated);
+        saveStateToDB(updated).catch(() => {});
+      }
+      return changed ? updated : prev;
+    });
+  }, [dbHabits, settings]);
+
   return {
     state,
     settings,
@@ -210,5 +297,6 @@ export function useDB(): UseDBResult {
     saveDayLog: handleSaveDayLog,
     saveSettings: handleSaveSettings,
     refresh: loadData,
+    recalcStreaks: handleRecalcStreaks,
   };
 }

@@ -489,11 +489,27 @@ export async function migrateLocalStorageToSupabase(
     }
 
     // ── Done ────────────────────────────────────────────
-    markMigrated();
+    // Only mark as migrated if there were no errors (so retry works on partial failure)
     if (sectionErrors.length > 0) {
-      report("Summary", "error", `Partial success. Errors in: ${sectionErrors.join("; ")}`);
+      report("Summary", "error", `Partial upload. Failed sections: ${sectionErrors.join("; ")}. Will retry on next upload.`);
+      // Don't markMigrated() — allow retry
     } else {
-      report("Summary", "done", "All data uploaded successfully!");
+      // Verify data actually reached Supabase before marking complete
+      report("Verify upload", "running");
+      const { data: verifyLogs } = await sb.from("daily_logs").select("id", { count: "exact", head: true }).eq("user_id", userId);
+      const { data: verifyXp } = await sb.from("user_xp").select("total_xp").eq("user_id", userId).single();
+      const localState = loadState();
+      const cloudHasData = (verifyLogs?.length ?? 0) > 0 || (verifyXp?.total_xp ?? 0) > 0;
+      const localHasData = localState.logs.length > 0 || localState.totalXp > 0;
+
+      if (localHasData && !cloudHasData) {
+        report("Verify upload", "error", "Data not found in Supabase after upload — will retry");
+        // Don't markMigrated() — allow retry
+      } else {
+        report("Verify upload", "done");
+        markMigrated();
+        report("Summary", "done", "All data uploaded and verified!");
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

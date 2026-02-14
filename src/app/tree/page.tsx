@@ -94,6 +94,8 @@ export default function SkillTreePage() {
 
   useEffect(() => {
     if (!loading) {
+      // Streaks are already recalculated by useDB (single source of truth).
+      // No need to recalculate here — just read state.streaks.
       setSuggestions(evaluateLevelSuggestions(state, settings, dbHabits ?? undefined));
     }
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
-import { getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask, getAdminSummary } from "@/lib/store";
+import { loadState, getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask, getAdminSummary } from "@/lib/store";
 import type { DayLog, DeferredHabit, AdminTask } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
 import { useDB } from "@/hooks/useDB";
@@ -38,9 +38,35 @@ type SubmissionResult = {
 };
 
 // ─── Component ──────────────────────────────────────────────
+/** Pick the first unanswered stack (morning→midday→evening), falling back to time-of-day.
+ *  Reads localStorage synchronously so the user lands on the right stack immediately. */
+function getSmartInitialStack(): HabitStack {
+  if (typeof window === "undefined") return getCurrentStack();
+  try {
+    const raw = localStorage.getItem("accountability-tracker");
+    if (!raw) return getCurrentStack();
+    const state = JSON.parse(raw);
+    const today = new Date().toISOString().slice(0, 10);
+    const todayLog = state?.logs?.find((l: { date: string }) => l.date === today);
+    if (!todayLog) return getCurrentStack();
+
+    const allHabits = getResolvedHabits(false, null, undefined); // offline fallback — static habits
+    const stackOrder: HabitStack[] = ["morning", "midday", "evening"];
+    for (const stack of stackOrder) {
+      if (!isStackAnswered(stack, todayLog, allHabits)) {
+        return stack;
+      }
+    }
+    // All answered — show the time-based stack (lock screen will handle it)
+    return getCurrentStack();
+  } catch {
+    return getCurrentStack();
+  }
+}
+
 export default function CheckinPage() {
   const { state: dbState, settings, dbHabits, loading, saveState: dbSaveState, saveDayLog } = useDB();
-  const [activeStack, setActiveStack] = useState<HabitStack>(getCurrentStack);
+  const [activeStack, setActiveStack] = useState<HabitStack>(getSmartInitialStack);
   const [phase, setPhase] = useState<"checkin" | "result">("checkin");
 
   // Binary + measured entries
@@ -69,6 +95,22 @@ export default function CheckinPage() {
   const [allStacksDone, setAllStacksDone] = useState(false);
   const [dayDismissed, setDayDismissed] = useState(false);
 
+  // ─── Fast-path: synchronous lock check on mount ───
+  // getSmartInitialStack() already picked the first unanswered stack.
+  // This effect runs the lock check immediately from localStorage (no async wait).
+  useEffect(() => {
+    // Check sessionStorage dismissal
+    const dismissKey = `lock-dismissed-${getToday()}`;
+    if (typeof window !== "undefined" && sessionStorage.getItem(dismissKey)) {
+      setDayDismissed(true);
+    }
+
+    // Run lock check synchronously from localStorage
+    const localState = loadState();
+    checkStackLock(activeStack, localState);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Full data load (runs after useDB finishes loading) ───
   useEffect(() => {
     if (loading) return;
 
@@ -125,7 +167,7 @@ export default function CheckinPage() {
 
     // Check if current stack is already submitted
     checkStackLock(activeStack, dbState);
-  }, [activeStack, loading, dbState]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeStack, loading, dbState, dbHabits, settings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function checkStackLock(stack: HabitStack, state?: typeof dbState) {
     const s = state ?? dbState;
@@ -142,8 +184,11 @@ export default function CheckinPage() {
     const stackBad = stackHabits.filter((h) => h.category === "bad" && h.is_active);
     const stackMeasured = stackHabits.filter((h) => h.category === "measured" && h.is_active);
 
-    // Check if every binary has been responded to (uses shared service)
-    const allBinaryAnswered = isStackAnswered(stack, todayLog, stackHabits);
+    // Check binary: use direct lookup instead of isStackAnswered to avoid double-filtering by h.stack
+    const allBinaryAnswered = stackBinary.length > 0 && stackBinary.every((h) => {
+      const entry = todayLog.entries[h.id];
+      return entry && (entry.status === "done" || entry.status === "missed" || entry.status === "later");
+    });
     const allBadAnswered = stackBad.length === 0 || stackBad.every((h) => {
       const entry = todayLog.badEntries[h.id];
       return entry && (entry.occurred === true || entry.occurred === false);
@@ -653,25 +698,63 @@ export default function CheckinPage() {
         </div>
 
         {/* Actions */}
-        <div className="flex gap-3">
-          <a
-            href="/"
-            className="rounded-xl bg-surface-800 hover:bg-surface-700 px-6 py-3 text-sm font-medium transition-colors"
-          >
-            🏠 Dashboard
-          </a>
-          <button
-            onClick={() => {
-              setPhase("checkin");
-              setEntries(new Map());
-              setBadEntries(new Map());
-              setResult(null);
-            }}
-            className="rounded-xl bg-brand hover:bg-brand-dark px-6 py-3 text-sm font-bold text-white transition-colors"
-          >
-            📊 Log More
-          </button>
-        </div>
+        {(() => {
+          // Find the next UNANSWERED stack (not just chronological next)
+          const today = getToday();
+          const todayLog = dbState.logs.find((l) => l.date === today);
+          const allHabits = getResolvedHabits(false, dbHabits, settings);
+          const stackOrder: HabitStack[] = ["morning", "midday", "evening"];
+          let nextStack: HabitStack | null = null;
+          for (const s of stackOrder) {
+            if (s !== activeStack && todayLog && !isStackAnswered(s, todayLog, allHabits)) {
+              nextStack = s;
+              break;
+            }
+          }
+          // Fallback to simple chronological if no todayLog yet
+          if (!todayLog) {
+            nextStack = activeStack === "morning" ? "midday" : activeStack === "midday" ? "evening" : null;
+          }
+          const stackLabel = nextStack === "morning" ? "🌅 Move to Morning" : nextStack === "midday" ? "☀️ Move to Afternoon" : nextStack === "evening" ? "🌙 Move to Evening" : null;
+          return (
+            <div className="w-full max-w-sm space-y-2">
+              {nextStack && stackLabel && (
+                <button
+                  onClick={() => {
+                    setActiveStack(nextStack!);
+                    setPhase("checkin");
+                    setEntries(new Map());
+                    setBadEntries(new Map());
+                    setResult(null);
+                    setStackAlreadyDone(false);
+                  }}
+                  className="w-full rounded-xl bg-brand hover:bg-brand-dark text-white py-3 text-sm font-bold transition-colors active:scale-[0.98]"
+                >
+                  {stackLabel}
+                </button>
+              )}
+              <div className="flex gap-2">
+                <a
+                  href="/"
+                  className="flex-1 rounded-xl bg-surface-800 hover:bg-surface-700 py-3 text-sm font-medium transition-colors text-center"
+                >
+                  🏠 Dashboard
+                </a>
+                <button
+                  onClick={() => {
+                    setPhase("checkin");
+                    setEntries(new Map());
+                    setBadEntries(new Map());
+                    setResult(null);
+                  }}
+                  className="flex-1 rounded-xl bg-surface-800 hover:bg-surface-700 py-3 text-sm font-medium transition-colors"
+                >
+                  📊 Log More
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -679,7 +762,17 @@ export default function CheckinPage() {
   // ─── Lock Screen (stack already submitted) ─────────────────
   if (phase === "checkin" && stackAlreadyDone && !dayDismissed) {
     const stackLabel = activeStack === "morning" ? "Morning" : activeStack === "midday" ? "Afternoon" : "Evening";
-    const nextStack: HabitStack | null = activeStack === "morning" ? "midday" : activeStack === "midday" ? "evening" : null;
+    // Find next UNANSWERED stack (not just chronological)
+    const lockTodayLog = dbState.logs.find((l) => l.date === getToday());
+    const lockAllHabits = getResolvedHabits(false, dbHabits, settings);
+    const lockStackOrder: HabitStack[] = ["morning", "midday", "evening"];
+    let nextStack: HabitStack | null = null;
+    for (const s of lockStackOrder) {
+      if (s !== activeStack && (!lockTodayLog || !isStackAnswered(s, lockTodayLog, lockAllHabits))) {
+        nextStack = s;
+        break;
+      }
+    }
     const quote = getQuoteOfTheDay();
 
     // Full-day celebration when ALL stacks are complete
@@ -740,6 +833,12 @@ export default function CheckinPage() {
           {/* Actions */}
           <div className="w-full max-w-sm space-y-2">
             <a
+              href="/coach?mode=review"
+              className="block w-full rounded-xl bg-brand text-white py-3 text-sm font-bold text-center transition-colors active:scale-[0.98]"
+            >
+              {"📊"} Weekly Review
+            </a>
+            <a
               href="/edit-log"
               className="block w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm font-medium text-neutral-300 text-center hover:bg-surface-700 transition-colors"
             >
@@ -747,7 +846,7 @@ export default function CheckinPage() {
             </a>
             <a
               href="/"
-              className="block w-full rounded-xl bg-done text-white py-3 text-sm font-bold text-center transition-colors active:scale-[0.98]"
+              className="block w-full rounded-xl bg-surface-800 py-3 text-sm font-medium text-neutral-400 text-center hover:bg-surface-700 transition-colors"
             >
               {"🏠"} Dashboard
             </a>
@@ -836,7 +935,7 @@ export default function CheckinPage() {
               }}
               className="w-full rounded-xl bg-brand hover:bg-brand-dark text-white py-3 text-sm font-bold transition-colors active:scale-[0.98]"
             >
-              {nextStack === "midday" ? "☀️ Move to Afternoon" : "🌙 Move to Evening"}
+              {nextStack === "morning" ? "🌅 Move to Morning" : nextStack === "midday" ? "☀️ Move to Afternoon" : "🌙 Move to Evening"}
             </button>
           )}
 
@@ -875,8 +974,8 @@ export default function CheckinPage() {
           <h1 className="text-xl font-bold">
             {getGreeting("Michael")} {getGreetingEmoji()}
           </h1>
-          <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
-            ✕
+          <a href="/" className="text-neutral-400 text-lg hover:text-neutral-200 transition-colors">
+            ↩
           </a>
         </div>
         <p className="text-sm text-neutral-400 italic">

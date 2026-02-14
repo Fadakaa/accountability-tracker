@@ -252,6 +252,15 @@ export async function saveDayLogToDB(dayLog: DayLog, fullState: LocalState): Pro
 
 /** Save full state (for operations like editing a log, sprint changes, etc.) */
 export async function saveStateToDB(state: LocalState): Promise<void> {
+  // Safety: never persist empty state — this would wipe real data
+  const existingLocal = loadState();
+  const localHasData = existingLocal.logs.length > 0 || existingLocal.totalXp > 0;
+  const stateHasData = state.logs.length > 0 || state.totalXp > 0;
+  if (localHasData && !stateHasData) {
+    console.warn("[db] saveStateToDB blocked: refusing to overwrite data with empty state");
+    return;
+  }
+
   // Always save to localStorage
   saveState(state);
 
@@ -349,7 +358,8 @@ export async function loadAdminTasksFromDB(date?: string): Promise<AdminTask[]> 
     const { data, error } = await (supabase.from("admin_tasks") as any)
       .select("*")
       .eq("user_id", userId)
-      .eq("task_date", target);
+      .eq("task_date", target)
+      .order("created_at", { ascending: true });
 
     if (error || !data) return loadAdminTasks(date);
 
@@ -374,7 +384,8 @@ export async function loadAdminBacklogFromDB(): Promise<AdminTask[]> {
       .select("*")
       .eq("user_id", userId)
       .eq("in_backlog", true)
-      .eq("completed", false);
+      .eq("completed", false)
+      .order("created_at", { ascending: true });
 
     if (error || !data) {
       const { loadAdminBacklog } = await import("@/lib/store");
@@ -629,7 +640,7 @@ export async function loadHabitsFromDB(): Promise<{ habits: import("@/types/data
       sbAny.from("habit_levels").select("*"),
     ]);
 
-    if (!habitsRes.data) return null;
+    if (!habitsRes.data || habitsRes.data.length === 0) return null;
 
     return {
       habits: habitsRes.data as import("@/types/database").Habit[],

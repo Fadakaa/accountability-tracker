@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getTodayLog, getLevelForXP, recalculateStreaks } from "@/lib/store";
+import { getTodayLog, getLevelForXP } from "@/lib/store";
 import type { AdminTask, ShowingUpData } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
 import type { Quote } from "@/lib/habits";
@@ -18,7 +18,7 @@ import { useDB } from "@/hooks/useDB";
 import { loadAdminTasksFromDB, recordAppOpenToDB } from "@/lib/db";
 
 export default function Home() {
-  const { state, settings, dbHabits, saveState: dbSaveState, loading } = useDB();
+  const { state, settings, dbHabits, loading } = useDB();
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
   const [nextCheckin, setNextCheckin] = useState<string>("");
@@ -27,15 +27,8 @@ export default function Home() {
   useEffect(() => {
     if (loading) return;
 
-    // Recalculate streaks from log history (source of truth)
-    const allHabits = getResolvedHabits(false, dbHabits, settings);
-    const habitSlugsById: Record<string, string> = {};
-    for (const h of allHabits) {
-      habitSlugsById[h.id] = h.slug;
-    }
-    const updated = { ...state };
-    updated.streaks = recalculateStreaks(updated, habitSlugsById);
-    dbSaveState(updated);
+    // Streaks are already recalculated by useDB (single source of truth).
+    // No need to recalculate here — just read state.streaks.
 
     setWeakHabits(getWeakHabits());
     setNextCheckin(getNextCheckinDisplay());
@@ -287,11 +280,21 @@ export default function Home() {
           <h3 className="text-[9px] font-bold text-blue-400/70 uppercase tracking-[0.15em] mb-2 px-1">
             Reflect
           </h3>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <NavTile icon="📊" label="Weekly" href="/weekly" compact />
             <NavTile icon="🔍" label="Insights" href="/insights" compact />
-            <NavTile icon="🎬" label="Wrap-Up" href="/wrap" compact />
             <NavTile icon="🌳" label="Tree" href="/tree" compact />
+          </div>
+        </div>
+
+        {/* Coach — AI coaching + weekly review */}
+        <div>
+          <h3 className="text-[9px] font-bold text-purple-400/70 uppercase tracking-[0.15em] mb-2 px-1">
+            Coach
+          </h3>
+          <div className="grid grid-cols-2 gap-2">
+            <NavTile icon="⚡" label="Strategy" href="/coach" accent />
+            <NavTile icon="📊" label="Review" href="/coach?mode=review" accent />
           </div>
         </div>
 

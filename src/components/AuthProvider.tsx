@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { clearAllLocalData } from "@/lib/store";
 
 interface AuthContextType {
   user: User | null;
@@ -55,6 +56,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    // Clear all app data from localStorage so the next user starts fresh
+    clearAllLocalData();
   };
 
   return (

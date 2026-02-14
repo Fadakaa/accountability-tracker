@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getToday, recalculateStreaks } from "@/lib/store";
+import { getToday } from "@/lib/store";
 import type { GymSessionLocal, GymExerciseLocal, GymSetLocal, GymRoutine, GymRoutineExercise } from "@/lib/store";
 import type { TrainingType } from "@/types/database";
 import { XP_VALUES } from "@/lib/habits";
@@ -28,7 +28,7 @@ const COMMON_EXERCISES: Record<string, string[]> = {
 type Phase = "setup" | "logging" | "complete" | "archive" | "routines";
 
 export default function GymPage() {
-  const { state, settings, dbHabits, loading, saveState: dbSaveState } = useDB();
+  const { state, settings, dbHabits, loading, saveState: dbSaveState, recalcStreaks } = useDB();
   const [phase, setPhase] = useState<Phase>("setup");
   const [trainingType, setTrainingType] = useState<TrainingType>("gym");
   const [muscleGroup, setMuscleGroup] = useState<string>("");
@@ -112,14 +112,9 @@ export default function GymPage() {
           submittedAt: new Date().toISOString(),
         });
       }
-      // Recalculate streaks from log history (source of truth)
-      const allHabits = getResolvedHabits(false, dbHabits, settings);
-      const habitSlugsById: Record<string, string> = {};
-      for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
-      currentState.streaks = recalculateStreaks(currentState, habitSlugsById);
-
       currentState.totalXp += XP_VALUES.BARE_MINIMUM_HABIT;
       dbSaveState(currentState);
+      recalcStreaks(); // single source of truth — useDB recalculates and persists
     }
 
     // Save minimal gym session
@@ -260,12 +255,6 @@ export default function GymPage() {
         xp += XP_VALUES.MEASURED_AT_TARGET;
       }
 
-      // Recalculate streaks from log history (source of truth)
-      const allHabits = getResolvedHabits(false, dbHabits, settings);
-      const habitSlugsById: Record<string, string> = {};
-      for (const h of allHabits) { habitSlugsById[h.id] = h.slug; }
-      currentState.streaks = recalculateStreaks(currentState, habitSlugsById);
-
       currentState.totalXp += xp;
 
       // Update today's log XP
@@ -273,6 +262,7 @@ export default function GymPage() {
       if (todayLog) todayLog.xpEarned += xp;
 
       dbSaveState(currentState);
+      recalcStreaks(); // single source of truth — useDB recalculates and persists
     }
 
     setSavedSession(session);
