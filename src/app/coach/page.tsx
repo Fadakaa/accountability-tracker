@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { useState, useEffect, useRef, useCallback, Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useDB } from "@/hooks/useDB";
@@ -83,23 +84,28 @@ function CollapsiblePanel({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="mb-3">
+    <div className="mb-4">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between bg-surface-800/60 hover:bg-surface-800 rounded-xl px-4 py-3 transition-colors"
+        className="w-full flex items-center justify-between rounded-2xl px-4 py-3.5 transition-all duration-200 bg-gradient-to-r from-surface-800/80 to-surface-800/40 border border-surface-700/50 hover:border-surface-600/60 hover:from-surface-800 hover:to-surface-800/60 backdrop-blur-sm"
       >
-        <div className="flex items-center gap-2">
-          <span className={`text-[10px] text-neutral-500 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
-          <span className="text-xs font-medium text-neutral-400">{icon} {title}</span>
+        <div className="flex items-center gap-2.5">
+          <span className="text-base">{icon}</span>
+          <span className="text-sm font-semibold text-neutral-300 tracking-wide">{title}</span>
         </div>
-        {!open && badge != null && badge > 0 && (
-          <span className="bg-brand/15 text-brand text-[10px] font-bold rounded-full px-2.5 py-0.5">
-            {badge}
+        <div className="flex items-center gap-2">
+          {!open && badge != null && badge > 0 && (
+            <span className="bg-brand/15 text-brand text-[10px] font-bold rounded-full px-2.5 py-0.5 min-w-[20px] text-center">
+              {badge}
+            </span>
+          )}
+          <span className={`text-neutral-500 text-[10px] transition-transform duration-200 ${open ? "rotate-180" : ""}`}>
+            ▼
           </span>
-        )}
+        </div>
       </button>
       {open && (
-        <div className="mt-2 animate-in fade-in duration-200">
+        <div className="mt-3 animate-in fade-in slide-in-from-top-1 duration-200">
           {children}
         </div>
       )}
@@ -107,12 +113,57 @@ function CollapsiblePanel({
   );
 }
 
+// ─── Error Boundary ─────────────────────────────────────────
+class CoachErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: "" };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message || "Unknown error" };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen px-6 text-center bg-surface-900">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-missed/20 to-missed/5 flex items-center justify-center border border-missed/15 mb-4">
+            <span className="text-2xl">⚠️</span>
+          </div>
+          <h2 className="text-base font-bold text-neutral-200 mb-2">Coach ran into an issue</h2>
+          <p className="text-xs text-neutral-500 mb-1 max-w-xs leading-relaxed">{this.state.error}</p>
+          <p className="text-[10px] text-neutral-600 mb-5">Try refreshing, or go back to the dashboard.</p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => window.location.reload()}
+              className="rounded-2xl bg-surface-800 border border-surface-700 px-6 py-2.5 text-sm font-medium text-neutral-300 hover:bg-surface-700 transition-colors"
+            >
+              Refresh
+            </button>
+            <a
+              href="/"
+              className="rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-6 py-2.5 text-sm font-bold text-white"
+            >
+              Dashboard
+            </a>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ─── Component ──────────────────────────────────────────────
 export default function CoachPageWrapper() {
   return (
-    <Suspense fallback={null}>
-      <CoachPage />
-    </Suspense>
+    <CoachErrorBoundary>
+      <Suspense fallback={null}>
+        <CoachPage />
+      </Suspense>
+    </CoachErrorBoundary>
   );
 }
 
@@ -180,23 +231,33 @@ function CoachPage() {
   }, [dbState, habits]);
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-screen bg-surface-900">
       {/* Header */}
-      <header className="px-4 pt-6 pb-2">
-        <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
-          ← Dashboard
-        </a>
-        <h1 className="text-xl font-bold mt-1">🧠 Coach</h1>
+      <header className="px-5 pt-6 pb-3">
+        <div className="flex items-center justify-between">
+          <a href="/" className="text-neutral-600 text-xs font-medium hover:text-neutral-400 transition-colors">
+            ← Back
+          </a>
+        </div>
+        <div className="flex items-center gap-3 mt-3">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand/30 to-brand/10 flex items-center justify-center border border-brand/20">
+            <span className="text-lg">🧠</span>
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-white tracking-tight">Coach</h1>
+            <p className="text-[11px] text-neutral-500 -mt-0.5">AI-powered accountability</p>
+          </div>
+        </div>
       </header>
 
       {/* Mode Switcher — Strategy / Review */}
-      <div className="px-4 mb-3">
-        <div className="flex bg-surface-800 rounded-xl p-1">
+      <div className="px-5 mb-4 mt-1">
+        <div className="flex bg-surface-800/80 rounded-2xl p-1 border border-surface-700/40">
           <button
             onClick={() => setMode("strategy")}
-            className={`flex-1 rounded-lg py-2.5 text-sm font-medium transition-all ${
+            className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-200 ${
               mode === "strategy"
-                ? "bg-brand text-white"
+                ? "bg-gradient-to-r from-brand to-brand-dark text-white shadow-lg shadow-brand/20"
                 : "text-neutral-500 hover:text-neutral-300"
             }`}
           >
@@ -204,9 +265,9 @@ function CoachPage() {
           </button>
           <button
             onClick={() => setMode("review")}
-            className={`flex-1 rounded-lg py-2.5 text-sm font-medium transition-all ${
+            className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-200 ${
               mode === "review"
-                ? "bg-brand text-white"
+                ? "bg-gradient-to-r from-brand to-brand-dark text-white shadow-lg shadow-brand/20"
                 : "text-neutral-500 hover:text-neutral-300"
             }`}
           >
@@ -217,7 +278,7 @@ function CoachPage() {
 
       {/* Strategy Mode — Chat-first with collapsible panels */}
       {mode === "strategy" && (
-        <div className="flex flex-col flex-1 px-4 pb-6">
+        <div className="flex flex-col flex-1 px-5 pb-6">
           {/* Insights — collapsible, default closed */}
           <CollapsiblePanel title="Insights" icon="📊" badge={insightCount}>
             <InsightsTab state={dbState} habits={habits} />
@@ -1092,16 +1153,19 @@ function InsightsTab({ state, habits }: { state: LocalState; habits: Habit[] }) 
 
   return (
     <div className="space-y-3">
-      <p className="text-[10px] text-neutral-600 uppercase tracking-wider font-bold mb-2">
+      <p className="text-[10px] text-neutral-500 uppercase tracking-wider font-bold mb-1 flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-500/60" />
         Pattern Detection — No AI Required
       </p>
       {insights.map((ins, i) => (
-        <div key={i} className={`rounded-xl bg-surface-800 border ${ins.color} p-4`}>
+        <div key={i} className={`rounded-2xl bg-gradient-to-br from-surface-800 to-surface-800/50 border ${ins.color} p-4 transition-all hover:from-surface-800/90 hover:to-surface-800/70`}>
           <div className="flex items-start gap-3">
-            <span className="text-xl">{ins.icon}</span>
+            <div className="w-9 h-9 rounded-xl bg-surface-700/50 flex items-center justify-center shrink-0 border border-surface-600/30">
+              <span className="text-base">{ins.icon}</span>
+            </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-neutral-200">{ins.title}</p>
-              <p className="text-xs text-neutral-500 mt-1">{ins.detail}</p>
+              <p className="text-sm font-semibold text-neutral-200">{ins.title}</p>
+              <p className="text-xs text-neutral-500 mt-1 leading-relaxed">{ins.detail}</p>
             </div>
           </div>
         </div>
@@ -1232,14 +1296,16 @@ function AnalysisTab({
   if (hasCoachKey === false) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <div className="text-4xl mb-3">🔑</div>
-        <h3 className="text-sm font-bold text-neutral-300 mb-2">No AI Provider Connected</h3>
-        <p className="text-xs text-neutral-500 mb-4 max-w-xs">
+        <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-surface-700 to-surface-800 flex items-center justify-center border border-surface-600/50 mb-4">
+          <span className="text-2xl">🔑</span>
+        </div>
+        <h3 className="text-sm font-bold text-neutral-200 mb-1.5">No AI Provider Connected</h3>
+        <p className="text-xs text-neutral-500 mb-5 max-w-[260px] leading-relaxed">
           Add your API key in Settings to enable AI coaching analysis.
         </p>
         <a
           href="/settings"
-          className="rounded-xl bg-brand px-6 py-2.5 text-sm font-bold text-white hover:bg-brand-dark transition-colors"
+          className="rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-8 py-3 text-sm font-bold text-white hover:shadow-lg hover:shadow-brand/20 transition-all active:scale-[0.98]"
         >
           Go to Settings
         </a>
@@ -1250,15 +1316,17 @@ function AnalysisTab({
   return (
     <div className="flex flex-col flex-1">
       {messages.length === 0 && !loading && (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-          <div className="text-5xl mb-4">🧠</div>
-          <h3 className="text-lg font-bold text-neutral-200 mb-2">Ready to coach</h3>
-          <p className="text-xs text-neutral-500 mb-6 max-w-xs">
-            Your coach will read all your data — habits, streaks, bad habits, training, reflections — and give you an honest analysis.
+        <div className="flex flex-col items-center justify-center py-14 text-center">
+          <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-brand/20 via-brand/10 to-transparent flex items-center justify-center border border-brand/15 mb-5">
+            <span className="text-4xl">🧠</span>
+          </div>
+          <h3 className="text-lg font-bold text-white mb-1.5 tracking-tight">Ready to coach</h3>
+          <p className="text-xs text-neutral-500 mb-7 max-w-[280px] leading-relaxed">
+            Your coach reads all your data — habits, streaks, training, reflections — and gives you an honest analysis.
           </p>
           <button
             onClick={handleAnalyse}
-            className="rounded-xl bg-brand hover:bg-brand-dark px-8 py-3.5 text-sm font-bold text-white transition-all active:scale-[0.98]"
+            className="rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-10 py-4 text-sm font-bold text-white shadow-lg shadow-brand/25 hover:shadow-brand/40 transition-all active:scale-[0.97]"
           >
             Analyse Me
           </button>
@@ -1266,19 +1334,24 @@ function AnalysisTab({
       )}
 
       {messages.length > 0 && (
-        <div className="flex-1 space-y-4 mb-4 overflow-y-auto">
+        <div className="flex-1 space-y-3 mb-4 overflow-y-auto">
           {messages.map((msg, i) => (
             <div
               key={i}
-              className={`rounded-xl p-4 ${
+              className={`rounded-2xl p-4 transition-all ${
                 msg.role === "user"
-                  ? "bg-brand/10 border border-brand/20 ml-8"
-                  : "bg-surface-800 border border-surface-700 mr-4"
+                  ? "bg-gradient-to-r from-brand/10 to-brand/5 border border-brand/15 ml-6"
+                  : "bg-gradient-to-br from-surface-800 to-surface-800/60 border border-surface-700/60 mr-2"
               }`}
             >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-bold text-neutral-400">
-                  {msg.role === "user" ? "You" : "🧠 Coach"}
+              <div className="flex items-center gap-2 mb-2.5">
+                {msg.role === "assistant" && (
+                  <div className="w-5 h-5 rounded-lg bg-brand/15 flex items-center justify-center">
+                    <span className="text-[10px]">🧠</span>
+                  </div>
+                )}
+                <span className="text-[11px] font-semibold text-neutral-400">
+                  {msg.role === "user" ? "You" : "Coach"}
                 </span>
                 <span className="text-[10px] text-neutral-600">
                   {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -1294,34 +1367,36 @@ function AnalysisTab({
       )}
 
       {loading && (
-        <div className="flex items-center justify-center gap-2 py-8">
-          <div className="w-2 h-2 rounded-full bg-brand animate-bounce" />
-          <div className="w-2 h-2 rounded-full bg-brand animate-bounce [animation-delay:0.1s]" />
-          <div className="w-2 h-2 rounded-full bg-brand animate-bounce [animation-delay:0.2s]" />
-          <span className="text-xs text-neutral-500 ml-2">Coach is thinking...</span>
+        <div className="flex items-center justify-center gap-3 py-10">
+          <div className="flex gap-1">
+            <div className="w-2 h-2 rounded-full bg-brand animate-bounce" />
+            <div className="w-2 h-2 rounded-full bg-brand animate-bounce [animation-delay:0.15s]" />
+            <div className="w-2 h-2 rounded-full bg-brand animate-bounce [animation-delay:0.3s]" />
+          </div>
+          <span className="text-xs text-neutral-500 font-medium">Coach is thinking...</span>
         </div>
       )}
 
       {error && (
-        <div className="rounded-xl bg-missed/10 border border-missed/20 p-3 mb-4">
+        <div className="rounded-2xl bg-missed/8 border border-missed/15 p-4 mb-4">
           <p className="text-xs text-missed">{error}</p>
         </div>
       )}
 
       {messages.length > 0 && !loading && (
-        <div className="flex gap-2 mt-auto pt-4 border-t border-surface-700">
+        <div className="flex gap-2 mt-auto pt-4">
           <input
             type="text"
             value={followUp}
             onChange={(e) => setFollowUp(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleFollowUp(); }}
             placeholder="Ask a follow-up..."
-            className="flex-1 bg-surface-800 rounded-xl px-4 py-3 text-sm text-neutral-300 border border-surface-700 outline-none focus:border-brand placeholder:text-neutral-600"
+            className="flex-1 bg-surface-800/80 rounded-2xl px-4 py-3.5 text-sm text-neutral-300 border border-surface-700/50 outline-none focus:border-brand/50 focus:bg-surface-800 placeholder:text-neutral-600 transition-all"
           />
           <button
             onClick={handleFollowUp}
             disabled={!followUp.trim()}
-            className="rounded-xl bg-brand px-4 py-3 text-sm font-bold text-white hover:bg-brand-dark transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            className="rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-5 py-3.5 text-sm font-bold text-white transition-all disabled:opacity-20 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-brand/20 active:scale-[0.97]"
           >
             Send
           </button>
@@ -1437,9 +1512,9 @@ function ExperimentsTab({
   const completed = experiments.filter(e => e.status === "completed");
 
   const SCALE_BADGES: Record<string, { label: string; color: string }> = {
-    small: { label: "S", color: "bg-emerald-500/20 text-emerald-400" },
-    medium: { label: "M", color: "bg-amber-500/20 text-amber-400" },
-    large: { label: "L", color: "bg-red-500/20 text-red-400" },
+    small: { label: "S", color: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20" },
+    medium: { label: "M", color: "bg-amber-500/15 text-amber-400 border border-amber-500/20" },
+    large: { label: "L", color: "bg-red-500/15 text-red-400 border border-red-500/20" },
   };
 
   return (
@@ -1448,7 +1523,7 @@ function ExperimentsTab({
         <button
           onClick={handleSuggestExperiment}
           disabled={suggesting}
-          className="w-full rounded-xl border border-brand/30 bg-brand/5 hover:bg-brand/10 py-3 text-sm font-bold text-brand transition-all disabled:opacity-50"
+          className="w-full rounded-2xl border border-brand/20 bg-gradient-to-r from-brand/8 to-transparent hover:from-brand/15 py-3.5 text-sm font-bold text-brand transition-all disabled:opacity-50 active:scale-[0.98]"
         >
           {suggesting ? "Coach is thinking..." : "🧪 Suggest New Experiment"}
         </button>
@@ -1456,32 +1531,35 @@ function ExperimentsTab({
 
       {active.length > 0 && (
         <div>
-          <p className="text-[10px] text-neutral-600 uppercase tracking-wider font-bold mb-2">Active</p>
+          <p className="text-[10px] text-neutral-500 uppercase tracking-wider font-bold mb-2.5 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-brand" />
+            Active
+          </p>
           {active.map(exp => (
-            <div key={exp.id} className="rounded-xl bg-surface-800 border border-brand/20 p-4 mb-2">
+            <div key={exp.id} className="rounded-2xl bg-gradient-to-br from-surface-800 to-surface-800/60 border border-brand/15 p-4 mb-3">
               <div className="flex items-center gap-2 mb-2">
-                <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${SCALE_BADGES[exp.scale]?.color}`}>
+                <span className={`text-[10px] font-bold rounded-lg px-2.5 py-1 ${SCALE_BADGES[exp.scale]?.color}`}>
                   {SCALE_BADGES[exp.scale]?.label}
                 </span>
                 <span className="text-sm font-bold text-neutral-200">{exp.title}</span>
               </div>
               {exp.startDate && (
-                <p className="text-[10px] text-neutral-600 mb-2">Started {exp.startDate} · {exp.durationDays} days</p>
+                <p className="text-[10px] text-neutral-600 mb-3">Started {exp.startDate} · {exp.durationDays} days</p>
               )}
               {completingId === exp.id ? (
-                <div className="space-y-2 mt-3">
+                <div className="space-y-2.5 mt-3">
                   <textarea
                     value={outcomeText}
                     onChange={(e) => setOutcomeText(e.target.value)}
                     placeholder="How did it go? What did you notice?"
                     rows={3}
-                    className="w-full bg-surface-700 rounded-lg px-3 py-2 text-sm text-neutral-300 border border-surface-600 outline-none resize-none focus:border-brand"
+                    className="w-full bg-surface-700/50 rounded-xl px-3.5 py-2.5 text-sm text-neutral-300 border border-surface-600/50 outline-none resize-none focus:border-brand/50 transition-colors"
                   />
                   <div className="flex gap-2">
-                    <button onClick={() => handleComplete(exp.id)} className="flex-1 rounded-lg bg-done/20 text-done py-2 text-xs font-bold">
+                    <button onClick={() => handleComplete(exp.id)} className="flex-1 rounded-xl bg-done/15 text-done py-2.5 text-xs font-bold hover:bg-done/25 transition-colors">
                       Save & Complete
                     </button>
-                    <button onClick={() => setCompletingId(null)} className="rounded-lg border border-surface-600 px-4 py-2 text-xs text-neutral-500">
+                    <button onClick={() => setCompletingId(null)} className="rounded-xl border border-surface-600/50 px-4 py-2.5 text-xs text-neutral-500 hover:text-neutral-300 transition-colors">
                       Cancel
                     </button>
                   </div>
@@ -1489,7 +1567,7 @@ function ExperimentsTab({
               ) : (
                 <button
                   onClick={() => setCompletingId(exp.id)}
-                  className="mt-2 rounded-lg bg-done/10 border border-done/20 px-4 py-2 text-xs font-bold text-done hover:bg-done/20 transition-colors"
+                  className="mt-2 rounded-xl bg-done/10 border border-done/15 px-5 py-2.5 text-xs font-bold text-done hover:bg-done/20 transition-all active:scale-[0.98]"
                 >
                   Mark Complete
                 </button>
@@ -1501,31 +1579,34 @@ function ExperimentsTab({
 
       {suggested.length > 0 && (
         <div>
-          <p className="text-[10px] text-neutral-600 uppercase tracking-wider font-bold mb-2">Suggested</p>
+          <p className="text-[10px] text-neutral-500 uppercase tracking-wider font-bold mb-2.5 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500/60" />
+            Suggested
+          </p>
           {suggested.map(exp => (
-            <div key={exp.id} className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-2">
+            <div key={exp.id} className="rounded-2xl bg-gradient-to-br from-surface-800 to-surface-800/40 border border-surface-700/50 p-4 mb-3">
               <div className="flex items-center gap-2 mb-2">
-                <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${SCALE_BADGES[exp.scale]?.color}`}>
+                <span className={`text-[10px] font-bold rounded-lg px-2.5 py-1 ${SCALE_BADGES[exp.scale]?.color}`}>
                   {SCALE_BADGES[exp.scale]?.label}
                 </span>
-                <span className={`text-[10px] rounded-full px-2 py-0.5 bg-surface-700 text-neutral-500`}>
+                <span className={`text-[10px] rounded-lg px-2.5 py-1 bg-surface-700/50 text-neutral-500 font-medium`}>
                   {exp.complexity}
                 </span>
                 <span className="text-sm font-bold text-neutral-200">{exp.title}</span>
               </div>
-              <div className="text-xs text-neutral-400 mb-3 leading-relaxed">
+              <div className="text-xs text-neutral-400 mb-3.5 leading-relaxed">
                 <CoachMarkdown content={exp.description} />
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => handleAccept(exp.id)}
-                  className="flex-1 rounded-lg bg-brand/20 text-brand py-2 text-xs font-bold hover:bg-brand/30 transition-colors"
+                  className="flex-1 rounded-xl bg-gradient-to-r from-brand/20 to-brand/10 text-brand py-2.5 text-xs font-bold hover:from-brand/30 hover:to-brand/20 transition-all active:scale-[0.98]"
                 >
                   Accept
                 </button>
                 <button
                   onClick={() => handleSkip(exp.id)}
-                  className="rounded-lg border border-surface-600 px-4 py-2 text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+                  className="rounded-xl border border-surface-600/50 px-5 py-2.5 text-xs text-neutral-500 hover:text-neutral-300 hover:border-surface-500/50 transition-all"
                 >
                   Skip
                 </button>
@@ -1537,15 +1618,20 @@ function ExperimentsTab({
 
       {completed.length > 0 && (
         <div>
-          <p className="text-[10px] text-neutral-600 uppercase tracking-wider font-bold mb-2">Completed</p>
+          <p className="text-[10px] text-neutral-500 uppercase tracking-wider font-bold mb-2.5 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-done/60" />
+            Completed
+          </p>
           {completed.map(exp => (
-            <div key={exp.id} className="rounded-xl bg-surface-800/50 border border-surface-700/50 p-4 mb-2 opacity-80">
+            <div key={exp.id} className="rounded-2xl bg-surface-800/30 border border-surface-700/30 p-4 mb-2">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-done text-xs">✓</span>
+                <div className="w-4 h-4 rounded-md bg-done/15 flex items-center justify-center">
+                  <span className="text-done text-[9px] font-bold">✓</span>
+                </div>
                 <span className="text-sm font-medium text-neutral-400">{exp.title}</span>
               </div>
               {exp.outcome && (
-                <p className="text-xs text-neutral-500 italic mt-1">&quot;{exp.outcome}&quot;</p>
+                <p className="text-xs text-neutral-500 italic mt-1.5 pl-6">&quot;{exp.outcome}&quot;</p>
               )}
             </div>
           ))}
@@ -1554,9 +1640,11 @@ function ExperimentsTab({
 
       {experiments.length === 0 && (
         <div className="flex flex-col items-center justify-center py-12 text-center">
-          <div className="text-4xl mb-3">🧪</div>
-          <h3 className="text-sm font-bold text-neutral-300 mb-2">No Experiments Yet</h3>
-          <p className="text-xs text-neutral-500 max-w-xs">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-surface-700 to-surface-800 flex items-center justify-center border border-surface-600/50 mb-4">
+            <span className="text-2xl">🧪</span>
+          </div>
+          <h3 className="text-sm font-bold text-neutral-200 mb-1.5">No Experiments Yet</h3>
+          <p className="text-xs text-neutral-500 max-w-[260px] leading-relaxed">
             {hasCoachKey
               ? "Tap 'Suggest New Experiment' to get a data-driven recommendation from your coach."
               : "Connect your AI provider in Settings to get started."}
@@ -1579,21 +1667,22 @@ function CoachMarkdown({ content }: { content: string }) {
 
         if (isList) {
           return (
-            <ul key={i} className="list-disc list-inside space-y-1 my-2">
+            <ul key={i} className="space-y-1.5 my-2.5">
               {lines.filter(l => l.trim()).map((l, j) => (
-                <li key={j} className="text-xs text-neutral-400">
-                  <BoldText text={l.replace(/^[\s]*[-*]\s*/, "")} />
+                <li key={j} className="text-xs text-neutral-400 flex items-start gap-2">
+                  <span className="text-brand/60 mt-1 text-[8px]">●</span>
+                  <span className="flex-1"><BoldText text={l.replace(/^[\s]*[-*]\s*/, "")} /></span>
                 </li>
               ))}
             </ul>
           );
         }
 
-        if (p.startsWith("### ")) return <h4 key={i} className="text-xs font-bold text-neutral-300 mt-3 mb-1">{p.slice(4)}</h4>;
-        if (p.startsWith("## ")) return <h3 key={i} className="text-sm font-bold text-neutral-200 mt-3 mb-1">{p.slice(3)}</h3>;
+        if (p.startsWith("### ")) return <h4 key={i} className="text-xs font-bold text-neutral-200 mt-3.5 mb-1.5">{p.slice(4)}</h4>;
+        if (p.startsWith("## ")) return <h3 key={i} className="text-sm font-bold text-neutral-100 mt-3.5 mb-1.5">{p.slice(3)}</h3>;
 
         return (
-          <p key={i} className="text-xs text-neutral-400 mb-2 leading-relaxed">
+          <p key={i} className="text-[13px] text-neutral-400 mb-2.5 leading-relaxed">
             <BoldText text={p.replace(/\n/g, " ")} />
           </p>
         );
