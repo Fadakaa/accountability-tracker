@@ -1122,6 +1122,7 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [testError, setTestError] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [hasExistingKey, setHasExistingKey] = useState(false);
 
   // Check if an API key already exists
@@ -1163,6 +1164,7 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
   async function handleSaveKey() {
     if (!user || !provider || !apiKey.trim()) return;
     setSaveStatus("saving");
+    setSaveError("");
 
     try {
       const { supabase } = await import("@/lib/supabase");
@@ -1192,8 +1194,10 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
       setTimeout(() => setSaveStatus("idle"), 3000);
     } catch (err) {
       console.error("[settings] Save API key failed:", err);
+      const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null ? JSON.stringify(err) : String(err);
+      setSaveError(msg);
       setSaveStatus("error");
-      setTimeout(() => setSaveStatus("idle"), 3000);
+      setTimeout(() => setSaveStatus("idle"), 5000);
     }
   }
 
@@ -1347,6 +1351,9 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
           </div>
         )}
 
+        {saveError && (
+          <p className="text-[10px] text-missed mt-1">Save error: {saveError}</p>
+        )}
         {testError && (
           <p className="text-[10px] text-missed mt-1">{testError}</p>
         )}
