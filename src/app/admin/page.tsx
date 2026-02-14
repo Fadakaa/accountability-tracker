@@ -58,7 +58,7 @@ export default function AdminPage() {
 
   function handleFocus(taskId: string) {
     focusBacklogTask(taskId);
-    // Sync updated task to DB — re-read from localStorage to get new state
+    // Sync updated task to DB in background — don't block the UI
     const updated = loadAllAdminTasks().find((t) => t.id === taskId);
     if (updated) saveAdminTaskToDB(updated);
     refresh();
@@ -66,7 +66,7 @@ export default function AdminPage() {
 
   function handleUnfocus(taskId: string) {
     unfocusBacklogTask(taskId);
-    // Sync updated task to DB
+    // Sync updated task to DB in background
     const updated = loadAllAdminTasks().find((t) => t.id === taskId);
     if (updated) saveAdminTaskToDB(updated);
     refresh();
@@ -74,7 +74,7 @@ export default function AdminPage() {
 
   function handleToggle(taskId: string) {
     toggleAdminTask(taskId);
-    // Sync updated task to DB
+    // Sync updated task to DB in background
     const updated = loadAllAdminTasks().find((t) => t.id === taskId);
     if (updated) saveAdminTaskToDB(updated);
     refresh();

@@ -152,6 +152,9 @@ export default function SettingsPage() {
       {/* Data Sync */}
       <DataSyncSection />
 
+      {/* AI Coach */}
+      <AICoachSection settings={localSettings} onUpdate={(newSettings) => { setLocalSettings(newSettings); dbSaveSettings(newSettings); }} />
+
       {/* Notifications & Schedule (unified) */}
       <NotificationSection />
 
@@ -329,6 +332,14 @@ function DataSyncSection() {
         loadStateFromDB(),
         loadSettingsFromDB(),
       ]);
+
+      // Safety: validate cloud data before overwriting local
+      const cloudHasData = cloudState.logs.length > 0 || cloudState.totalXp > 0;
+      if (!cloudHasData) {
+        setStatus("error");
+        setMessage("Cloud is empty — nothing to download. Upload your data first.");
+        return;
+      }
 
       // Write to localStorage
       if (typeof window !== "undefined") {
@@ -1096,6 +1107,250 @@ function QuotesSection({ settings, onUpdate }: { settings: UserSettings; onUpdat
           </div>
         );
       })}
+    </section>
+  );
+}
+
+// ─── AI Coach Settings ──────────────────────────────────────
+function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpdate: (s: UserSettings) => void }) {
+  const { user } = useAuth();
+  const [provider, setProvider] = useState<"anthropic" | "openai" | "google" | "">(
+    settings.coachSettings?.provider || ""
+  );
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState(settings.coachSettings?.model || "");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+  const [testError, setTestError] = useState("");
+  const [hasExistingKey, setHasExistingKey] = useState(false);
+
+  // Check if an API key already exists
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const { supabase } = await import("@/lib/supabase");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data } = await (supabase as any)
+          .from("coach_api_keys")
+          .select("provider, model")
+          .eq("user_id", user.id)
+          .single();
+        if (data) {
+          setHasExistingKey(true);
+          if (data.provider && !provider) setProvider(data.provider);
+          if (data.model && !model) setModel(data.model);
+        }
+      } catch { /* no key yet */ }
+    })();
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const MODELS: Record<string, { label: string; value: string }[]> = {
+    anthropic: [
+      { label: "Claude Sonnet 4", value: "claude-sonnet-4-20250514" },
+      { label: "Claude Haiku 3.5", value: "claude-3-5-haiku-20241022" },
+    ],
+    openai: [
+      { label: "GPT-4o Mini", value: "gpt-4o-mini" },
+      { label: "GPT-4o", value: "gpt-4o" },
+    ],
+    google: [
+      { label: "Gemini 2.0 Flash", value: "gemini-2.0-flash" },
+      { label: "Gemini 1.5 Pro", value: "gemini-1.5-pro" },
+    ],
+  };
+
+  async function handleSaveKey() {
+    if (!user || !provider || !apiKey.trim()) return;
+    setSaveStatus("saving");
+
+    try {
+      const { supabase } = await import("@/lib/supabase");
+      const selectedModel = model || MODELS[provider]?.[0]?.value || "";
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).from("coach_api_keys").upsert({
+        user_id: user.id,
+        provider,
+        api_key_encrypted: apiKey.trim(),
+        model: selectedModel,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id" });
+
+      if (error) throw error;
+
+      // Also save provider preference in settings
+      const newSettings = {
+        ...settings,
+        coachSettings: { provider: provider as "anthropic" | "openai" | "google", model: selectedModel },
+      };
+      onUpdate(newSettings);
+
+      setHasExistingKey(true);
+      setApiKey(""); // Clear the input after saving
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    } catch (err) {
+      console.error("[settings] Save API key failed:", err);
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
+  }
+
+  async function handleTestConnection() {
+    if (!user) return;
+    setTestStatus("testing");
+    setTestError("");
+
+    try {
+      const { supabase } = await import("@/lib/supabase");
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const res = await fetch("/api/coach/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: "Respond with exactly: CONNECTION_OK" },
+            { role: "user", content: "Test connection" },
+          ],
+          provider: settings.coachSettings?.provider || provider,
+          model: settings.coachSettings?.model || model,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      setTestStatus("success");
+      setTimeout(() => setTestStatus("idle"), 3000);
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : "Connection failed");
+      setTestStatus("error");
+      setTimeout(() => setTestStatus("idle"), 5000);
+    }
+  }
+
+  return (
+    <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+      <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+        🧠 AI Coach
+      </h2>
+      <p className="text-xs text-neutral-600 mb-4">
+        Connect your own AI provider to enable coaching analysis, experiment suggestions, and data-driven insights.
+      </p>
+
+      {/* Provider Selection */}
+      <div className="space-y-3">
+        <label className="text-xs text-neutral-400 font-medium">Provider</label>
+        <div className="flex gap-2">
+          {(["anthropic", "openai", "google"] as const).map((p) => {
+            const labels = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
+            const icons = { anthropic: "🟤", openai: "🟢", google: "🔵" };
+            return (
+              <button
+                key={p}
+                onClick={() => {
+                  setProvider(p);
+                  // Auto-select default model
+                  if (!model || !MODELS[p]?.some(m => m.value === model)) {
+                    setModel(MODELS[p]?.[0]?.value || "");
+                  }
+                }}
+                className={`flex-1 rounded-lg border px-3 py-2.5 text-xs font-medium transition-all ${
+                  provider === p
+                    ? "border-brand bg-brand/10 text-brand"
+                    : "border-surface-600 text-neutral-500 hover:border-surface-500"
+                }`}
+              >
+                {icons[p]} {labels[p]}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Model Selection */}
+        {provider && MODELS[provider] && (
+          <div>
+            <label className="text-xs text-neutral-400 font-medium">Model</label>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="mt-1 w-full rounded-lg bg-surface-700 border border-surface-600 px-3 py-2 text-sm text-neutral-300 outline-none focus:border-brand"
+            >
+              {MODELS[provider].map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* API Key Input */}
+        {provider && (
+          <div>
+            <label className="text-xs text-neutral-400 font-medium">
+              API Key {hasExistingKey && <span className="text-done">(saved)</span>}
+            </label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={hasExistingKey ? "Enter new key to replace existing..." : "sk-... or your API key"}
+              className="mt-1 w-full rounded-lg bg-surface-700 border border-surface-600 px-3 py-2 text-sm text-neutral-300 outline-none focus:border-brand placeholder:text-neutral-600"
+            />
+            <p className="text-[10px] text-neutral-600 mt-1">
+              Stored securely in Supabase. Never visible in the browser.
+            </p>
+          </div>
+        )}
+
+        {/* Actions */}
+        {provider && (
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleSaveKey}
+              disabled={!apiKey.trim() || saveStatus === "saving"}
+              className={`flex-1 rounded-lg py-2.5 text-xs font-bold transition-all ${
+                saveStatus === "saved"
+                  ? "bg-done/20 text-done border border-done/30"
+                  : saveStatus === "error"
+                    ? "bg-missed/20 text-missed border border-missed/30"
+                    : apiKey.trim()
+                      ? "bg-brand text-white hover:bg-brand-dark"
+                      : "bg-surface-700 text-neutral-600 cursor-not-allowed"
+              }`}
+            >
+              {saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved!" : saveStatus === "error" ? "Save Failed" : "Save Key"}
+            </button>
+
+            {hasExistingKey && (
+              <button
+                onClick={handleTestConnection}
+                disabled={testStatus === "testing"}
+                className={`flex-1 rounded-lg border py-2.5 text-xs font-medium transition-all ${
+                  testStatus === "success"
+                    ? "border-done/30 bg-done/10 text-done"
+                    : testStatus === "error"
+                      ? "border-missed/30 bg-missed/10 text-missed"
+                      : "border-surface-600 text-neutral-400 hover:border-brand hover:text-brand"
+                }`}
+              >
+                {testStatus === "testing" ? "Testing..." : testStatus === "success" ? "Connected!" : testStatus === "error" ? "Failed" : "Test Connection"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {testError && (
+          <p className="text-[10px] text-missed mt-1">{testError}</p>
+        )}
+      </div>
     </section>
   );
 }

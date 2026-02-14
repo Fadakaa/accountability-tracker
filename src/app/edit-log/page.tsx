@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { getToday, getLevelForXP } from "@/lib/store";
+import { getToday, getLevelForXP, recalculateStreaks } from "@/lib/store";
 import type { DayLog } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
 import { getHabitLevel, XP_VALUES, getFlameIcon } from "@/lib/habits";
@@ -70,11 +70,12 @@ function recalculateDayXP(log: DayLog, habits: Habit[]): number {
 
 // ─── Component ──────────────────────────────────────────────
 export default function EditLogPage() {
-  const { state, settings, dbHabits, loading, saveState: dbSaveState } = useDB();
+  const { state, settings, dbHabits, loading, saveState: dbSaveState, recalcStreaks } = useDB();
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [log, setLog] = useState<DayLog | null>(null);
   const [originalXP, setOriginalXP] = useState(0);
   const [saved, setSaved] = useState(false);
+  const [isNewLog, setIsNewLog] = useState(false);
 
   const habits = useMemo(() => getResolvedHabits(false, dbHabits, settings), [dbHabits, settings]);
 
@@ -85,12 +86,28 @@ export default function EditLogPage() {
       // Deep clone to avoid mutating state
       setLog(JSON.parse(JSON.stringify(dayLog)));
       setOriginalXP(dayLog.xpEarned);
+      setIsNewLog(false);
     } else {
       setLog(null);
+      setIsNewLog(false);
       setOriginalXP(0);
     }
     setSaved(false);
   }, [selectedDate, loading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function createNewLog() {
+    const newLog: DayLog = {
+      date: selectedDate,
+      entries: {},
+      badEntries: {},
+      xpEarned: 0,
+      bareMinimumMet: false,
+      submittedAt: new Date().toISOString(),
+    };
+    setLog(newLog);
+    setIsNewLog(true);
+    setOriginalXP(0);
+  }
 
   function updateEntry(habitId: string, status: LogStatus) {
     if (!log) return;
@@ -142,9 +159,6 @@ export default function EditLogPage() {
   function handleSave() {
     if (!log) return;
 
-    const logIndex = state.logs.findIndex((l) => l.date === selectedDate);
-    if (logIndex === -1) return;
-
     // Recalculate XP
     const newXP = recalculateDayXP(log, habits);
     const xpDelta = newXP - originalXP;
@@ -152,20 +166,48 @@ export default function EditLogPage() {
     log.xpEarned = newXP;
     const updatedState = { ...state };
     updatedState.logs = [...updatedState.logs];
-    updatedState.logs[logIndex] = log;
+
+    const logIndex = updatedState.logs.findIndex((l) => l.date === selectedDate);
+    if (logIndex === -1) {
+      // New log — insert it
+      updatedState.logs.push(log);
+    } else {
+      updatedState.logs[logIndex] = log;
+    }
+
     updatedState.totalXp += xpDelta;
     updatedState.currentLevel = getLevelForXP(updatedState.totalXp).level;
+
+    // Recalculate streaks after edit — keeps all views in sync
+    const allHabits = getResolvedHabits(false, dbHabits, settings);
+    const habitSlugsById: Record<string, string> = {};
+    for (const h of allHabits) {
+      habitSlugsById[h.id] = h.slug;
+    }
+    updatedState.streaks = recalculateStreaks(updatedState, habitSlugsById);
 
     dbSaveState(updatedState);
     saveDayLogToDB(log, updatedState);
     setOriginalXP(newXP);
+    setIsNewLog(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
 
-  // Get available dates (dates that have logs)
-  const availableDates = useMemo(() => {
-    return state.logs.map((l) => l.date).sort().reverse();
+  // Build recent dates (last 21 days) — shows all dates, not just logged ones
+  const recentDates = useMemo(() => {
+    const dates: string[] = [];
+    const today = new Date(getToday() + "T12:00:00");
+    for (let i = 0; i < 21; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+    return dates;
+  }, []);
+
+  const loggedDates = useMemo(() => {
+    return new Set(state.logs.map((l) => l.date));
   }, [state.logs]);
 
   const binaryHabits = habits.filter((h) => isBinaryLike(h.category) && h.is_active);
@@ -188,38 +230,46 @@ export default function EditLogPage() {
           Select Date
         </label>
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {availableDates.length > 0 ? (
-            availableDates.slice(0, 14).map((date) => {
-              const d = new Date(date + "T12:00:00");
-              const dayName = d.toLocaleDateString("en-GB", { weekday: "short" });
-              const dayNum = d.getDate();
-              const isToday = date === getToday();
-              const isSelected = date === selectedDate;
-              return (
-                <button
-                  key={date}
-                  onClick={() => setSelectedDate(date)}
-                  className={`flex-shrink-0 rounded-lg px-3 py-2 text-center transition-all min-w-[56px] ${
-                    isSelected
-                      ? "bg-brand text-white"
-                      : "bg-surface-700 text-neutral-400 hover:text-white"
-                  }`}
-                >
-                  <div className="text-[10px] uppercase">{dayName}</div>
-                  <div className="text-sm font-bold">{dayNum}</div>
-                  {isToday && <div className="text-[9px] text-brand">Today</div>}
-                </button>
-              );
-            })
-          ) : (
-            <p className="text-xs text-neutral-500">No logs yet. Complete a check-in first.</p>
-          )}
+          {recentDates.map((date) => {
+            const d = new Date(date + "T12:00:00");
+            const dayName = d.toLocaleDateString("en-GB", { weekday: "short" });
+            const dayNum = d.getDate();
+            const monthName = d.toLocaleDateString("en-GB", { month: "short" });
+            const isToday = date === getToday();
+            const isSelected = date === selectedDate;
+            const hasLog = loggedDates.has(date);
+            return (
+              <button
+                key={date}
+                onClick={() => setSelectedDate(date)}
+                className={`flex-shrink-0 rounded-lg px-3 py-2 text-center transition-all min-w-[56px] ${
+                  isSelected
+                    ? "bg-brand text-white"
+                    : hasLog
+                      ? "bg-surface-700 text-neutral-400 hover:text-white"
+                      : "bg-surface-700/50 text-neutral-600 hover:text-neutral-400 border border-dashed border-surface-600"
+                }`}
+              >
+                <div className="text-[10px] uppercase">{dayName}</div>
+                <div className="text-sm font-bold">{dayNum}</div>
+                <div className="text-[9px]">
+                  {isToday ? <span className={isSelected ? "text-white" : "text-brand"}>Today</span> : monthName}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </section>
 
       {!log ? (
-        <div className="flex-1 flex items-center justify-center text-neutral-600 text-sm">
-          No log for this date.
+        <div className="flex-1 flex flex-col items-center justify-center gap-4">
+          <p className="text-neutral-600 text-sm">No log for this date.</p>
+          <button
+            onClick={createNewLog}
+            className="rounded-xl bg-brand hover:bg-brand-dark text-white text-sm font-bold px-6 py-3 transition-colors active:scale-[0.98]"
+          >
+            + Create Log for {new Date(selectedDate + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}
+          </button>
         </div>
       ) : (
         <>
