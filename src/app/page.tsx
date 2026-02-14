@@ -24,6 +24,16 @@ export default function Home() {
   const [nextCheckin, setNextCheckin] = useState<string>("");
   const [showingUp, setShowingUp] = useState<ShowingUpData | null>(null);
 
+  // Redirect new users to onboarding
+  useEffect(() => {
+    if (loading) return;
+    const isNew = state.totalXp === 0 && state.logs.length === 0;
+    const hasOnboarded = typeof window !== "undefined" && localStorage.getItem("accountability-onboarded") === "true";
+    if (isNew && !hasOnboarded) {
+      window.location.href = "/onboarding";
+    }
+  }, [loading, state.totalXp, state.logs.length]);
+
   useEffect(() => {
     if (loading) return;
 

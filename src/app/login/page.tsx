@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [signupSuccess, setSignupSuccess] = useState(false);
+  const [honestyAgreed, setHonestyAgreed] = useState(false);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -148,6 +149,48 @@ export default function LoginPage() {
               />
             </div>
 
+            {/* Honesty Agreement — signup only */}
+            {mode === "signup" && (
+              <div className="rounded-2xl bg-surface-800/80 border border-surface-700/50 p-4 mt-2">
+                <p className="text-xs font-bold text-neutral-200 mb-2.5 tracking-tight">
+                  ⚔️ The Pact
+                </p>
+                <div className="space-y-2 mb-3.5">
+                  <p className="text-[11px] text-neutral-400 leading-relaxed">
+                    This system only works with <span className="text-white font-semibold">radical honesty</span>.
+                    If you miss a day, you record it. If you fail, you own it. No hiding, no excuses, no
+                    adjusting the numbers to feel better.
+                  </p>
+                  <p className="text-[11px] text-neutral-400 leading-relaxed">
+                    Once you begin, <span className="text-white font-semibold">you don&apos;t walk from the path</span>.
+                    The streaks will break. The numbers will hurt. Record them anyway. That&apos;s how you grow.
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <div className="relative mt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={honestyAgreed}
+                      onChange={(e) => setHonestyAgreed(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-5 h-5 rounded-md border-2 border-surface-600 bg-surface-700
+                                    peer-checked:bg-brand peer-checked:border-brand transition-all
+                                    group-hover:border-surface-500 flex items-center justify-center">
+                      {honestyAgreed && (
+                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-xs text-neutral-300 font-medium leading-relaxed">
+                    I commit to recording honestly — even when it&apos;s uncomfortable
+                  </span>
+                </label>
+              </div>
+            )}
+
             {/* Error */}
             {error && (
               <div className="rounded-lg bg-missed/10 border border-missed/30 px-3 py-2">
@@ -158,10 +201,13 @@ export default function LoginPage() {
             {/* Submit */}
             <button
               type="submit"
-              disabled={submitting}
-              className="w-full rounded-xl bg-brand hover:bg-brand-dark py-3.5 text-sm font-bold
-                         text-white transition-all active:scale-[0.98] disabled:opacity-50
-                         disabled:active:scale-100 mt-2"
+              disabled={submitting || (mode === "signup" && !honestyAgreed)}
+              className={`w-full rounded-xl py-3.5 text-sm font-bold text-white transition-all
+                         active:scale-[0.98] disabled:active:scale-100 mt-2 ${
+                           mode === "signup" && !honestyAgreed
+                             ? "bg-surface-700 text-neutral-500 cursor-not-allowed"
+                             : "bg-brand hover:bg-brand-dark disabled:opacity-50"
+                         }`}
             >
               {submitting
                 ? mode === "signin"
