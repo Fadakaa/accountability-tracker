@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useDB } from "@/hooks/useDB";
 import { useAuth } from "@/components/AuthProvider";
@@ -49,7 +49,6 @@ interface ChatMessage {
 }
 
 type CoachMode = "strategy" | "review";
-type StrategyTab = "insights" | "analysis" | "experiments";
 
 // ─── Reflection Questions (rotate weekly) ───────────────────
 const REFLECTION_QUESTIONS = [
@@ -67,6 +66,47 @@ function getWeeklyQuestion(): string {
   return REFLECTION_QUESTIONS[weekNum % REFLECTION_QUESTIONS.length];
 }
 
+// ─── Collapsible Panel ──────────────────────────────────────
+
+function CollapsiblePanel({
+  title,
+  icon,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  icon: string;
+  badge?: number;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between bg-surface-800/60 hover:bg-surface-800 rounded-xl px-4 py-3 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] text-neutral-500 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+          <span className="text-xs font-medium text-neutral-400">{icon} {title}</span>
+        </div>
+        {!open && badge != null && badge > 0 && (
+          <span className="bg-brand/15 text-brand text-[10px] font-bold rounded-full px-2.5 py-0.5">
+            {badge}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="mt-2 animate-in fade-in duration-200">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────
 export default function CoachPageWrapper() {
   return (
@@ -82,8 +122,8 @@ function CoachPage() {
   const { user } = useAuth();
   const initialMode = searchParams.get("mode") === "review" ? "review" : "strategy";
   const [mode, setMode] = useState<CoachMode>(initialMode);
-  const [tab, setTab] = useState<StrategyTab>("analysis");
   const [hasCoachKey, setHasCoachKey] = useState<boolean | null>(null);
+  const [activeExpCount, setActiveExpCount] = useState(0);
 
   // Review mode state
   const [reviewState, setReviewState] = useState<LocalState | null>(null);
@@ -104,6 +144,11 @@ function CoachPage() {
     })();
   }, [user]);
 
+  // Load experiment count for badge
+  useEffect(() => {
+    loadExperiments().then(exps => setActiveExpCount(exps.filter(e => e.status === "active" || e.status === "suggested").length));
+  }, []);
+
   // Initialize review state — streaks already recalculated by useDB (single source of truth)
   useEffect(() => {
     if (loading) return;
@@ -113,6 +158,26 @@ function CoachPage() {
   if (loading) return null;
 
   const habits = getResolvedHabits(false, dbHabits, settings);
+
+  // Compute insight count for collapsed badge
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const insightCount = useMemo(() => {
+    let count = 0;
+    const streaks = Object.entries(dbState.streaks).filter(([, v]) => v > 0);
+    if (streaks.length > 0) count++;
+    if (dbState.bareMinimumStreak > 0) count++;
+    const today = new Date().toISOString().slice(0, 10);
+    const recent14 = dbState.logs.filter(l => {
+      const diff = Math.round((new Date(today + "T12:00:00").getTime() - new Date(l.date + "T12:00:00").getTime()) / 86400000);
+      return diff >= 0 && diff < 14;
+    });
+    for (const h of habits.filter(h => isBinaryLike(h.category) && h.is_active)) {
+      let done = 0;
+      for (const log of recent14) { if (log.entries[h.id]?.status === "done") done++; }
+      if (recent14.length >= 5 && done / Math.min(recent14.length, 14) < 0.4) count++;
+    }
+    return count;
+  }, [dbState, habits]);
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -150,41 +215,23 @@ function CoachPage() {
         </div>
       </div>
 
-      {/* Strategy Mode */}
+      {/* Strategy Mode — Chat-first with collapsible panels */}
       {mode === "strategy" && (
         <div className="flex flex-col flex-1 px-4 pb-6">
-          <p className="text-xs text-neutral-600 mb-3">
-            AI-powered coaching, experiments & insights
-          </p>
+          {/* Insights — collapsible, default closed */}
+          <CollapsiblePanel title="Insights" icon="📊" badge={insightCount}>
+            <InsightsTab state={dbState} habits={habits} />
+          </CollapsiblePanel>
 
-          {/* Strategy Tabs */}
-          <div className="flex gap-1 bg-surface-800 rounded-xl p-1 mb-4">
-            {([
-              { key: "insights" as StrategyTab, label: "Insights", icon: "📊" },
-              { key: "analysis" as StrategyTab, label: "Analysis", icon: "🔍" },
-              { key: "experiments" as StrategyTab, label: "Experiments", icon: "🧪" },
-            ]).map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`flex-1 rounded-lg py-2.5 text-xs font-medium transition-all ${
-                  tab === t.key
-                    ? "bg-purple-600 text-white"
-                    : "text-neutral-500 hover:text-neutral-300"
-                }`}
-              >
-                {t.icon} {t.label}
-              </button>
-            ))}
+          {/* Coach Chat — always visible, takes remaining space */}
+          <div className="flex-1 flex flex-col min-h-0">
+            <AnalysisTab state={dbState} settings={settings} habits={habits} hasCoachKey={hasCoachKey} />
           </div>
 
-          {tab === "insights" && <InsightsTab state={dbState} habits={habits} />}
-          {tab === "analysis" && (
-            <AnalysisTab state={dbState} settings={settings} habits={habits} hasCoachKey={hasCoachKey} />
-          )}
-          {tab === "experiments" && (
+          {/* Experiments — collapsible, default closed */}
+          <CollapsiblePanel title="Experiments" icon="🧪" badge={activeExpCount}>
             <ExperimentsTab state={dbState} settings={settings} habits={habits} hasCoachKey={hasCoachKey} />
-          )}
+          </CollapsiblePanel>
         </div>
       )}
 
