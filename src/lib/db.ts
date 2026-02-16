@@ -618,21 +618,54 @@ export async function deleteGymRoutineFromDB(routineId: string): Promise<void> {
 
 export async function recordAppOpenToDB(): Promise<ShowingUpData> {
   // Always record locally
-  const data = recordAppOpen();
+  const localData = recordAppOpen();
 
   const { ok, userId } = await canUseSupabase();
-  if (!ok) return data;
+  if (!ok) return localData;
 
   try {
+    // Merge with Supabase data so opens from both web + app accumulate
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: remoteRow } = await (supabase.from("app_usage_stats") as any)
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+
+    let merged = localData;
+    if (remoteRow) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const remote = rowToShowingUp(remoteRow as any);
+      merged = {
+        totalOpens: Math.max(localData.totalOpens, remote.totalOpens) + 1,
+        uniqueDays: Math.max(localData.uniqueDays, remote.uniqueDays),
+        lastOpenDate: localData.lastOpenDate > remote.lastOpenDate ? localData.lastOpenDate : remote.lastOpenDate,
+        firstOpenDate: localData.firstOpenDate && remote.firstOpenDate
+          ? (localData.firstOpenDate < remote.firstOpenDate ? localData.firstOpenDate : remote.firstOpenDate)
+          : localData.firstOpenDate || remote.firstOpenDate,
+      };
+      // Update uniqueDays if today is a new day vs the merged lastOpenDate
+      const today = new Date().toISOString().slice(0, 10);
+      if (remote.lastOpenDate !== today && localData.lastOpenDate === today) {
+        // The +1 for today was already counted in localData.uniqueDays
+        merged.uniqueDays = Math.max(merged.uniqueDays, localData.uniqueDays);
+      }
+      merged.lastOpenDate = today;
+    }
+
+    // Save merged data locally and to Supabase
+    if (typeof window !== "undefined") {
+      localStorage.setItem("accountability-showing-up", JSON.stringify(merged));
+    }
     await dbUpsert("app_usage_stats",
-      showingUpToRow(data, userId),
+      showingUpToRow(merged, userId),
       { onConflict: "user_id" }
     );
+
+    return merged;
   } catch (err) {
     console.warn("[db] Failed to save showing up data to Supabase:", err);
+    return localData;
   }
-
-  return data;
 }
 
 export async function loadShowingUpFromDB(): Promise<ShowingUpData> {

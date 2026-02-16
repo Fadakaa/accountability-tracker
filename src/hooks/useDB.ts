@@ -132,7 +132,8 @@ export function useDB(): UseDBResult {
       setSyncStatus("offline");
       setLoading(false);
 
-      // Background Supabase sync for Capacitor — pull remote data if local is empty
+      // Background Supabase sync for Capacitor — always pull from Supabase when logged in
+      // so that web ↔ app data stays in sync (Supabase is the source of truth)
       if (user && isOnline()) {
         (async () => {
           try {
@@ -140,24 +141,13 @@ export function useDB(): UseDBResult {
               loadStateFromDB(),
               loadSettingsFromDB(),
             ]);
-            const localHasData = localState.logs.length > 0 || localState.totalXp > 0;
             const remoteHasData = remoteState.logs.length > 0 || remoteState.totalXp > 0;
 
-            if (remoteHasData && !localHasData) {
-              // Remote has data but local is empty — pull from Supabase
-              console.log("[useDB] Capacitor: pulling data from Supabase (local was empty)");
+            if (remoteHasData) {
+              // Supabase has data — use it as source of truth
+              console.log("[useDB] Capacitor: syncing from Supabase");
               setState(remoteState);
               saveState(remoteState); // cache in localStorage
-              setSettings(remoteSettings);
-              saveSettings(remoteSettings);
-            } else if (remoteHasData && localHasData) {
-              // Both have data — use whichever has more logs (more complete)
-              if (remoteState.logs.length > localState.logs.length) {
-                console.log("[useDB] Capacitor: remote has more data, merging");
-                setState(remoteState);
-                saveState(remoteState);
-              }
-              // Always take remote settings if they exist
               setSettings(remoteSettings);
               saveSettings(remoteSettings);
             }

@@ -12,11 +12,12 @@ import {
   getCompletedAdminHistory,
   getAdminVelocity,
   loadAllAdminTasks,
+  saveAllAdminTasks,
   loadAdminTasks as loadAdminTasksLocal,
   loadAdminBacklog as loadAdminBacklogLocal,
 } from "@/lib/store";
 import type { AdminTask, AdminVelocity, TaskSeverity } from "@/lib/store";
-import { saveAdminTaskToDB, deleteAdminTaskFromDB } from "@/lib/db";
+import { saveAdminTaskToDB, deleteAdminTaskFromDB, loadAdminTasksFromDB, loadAdminBacklogFromDB } from "@/lib/db";
 import { VelocityStats, SlippingBanner } from "@/components/AdminVelocity";
 
 type Tab = "today" | "backlog" | "history";
@@ -200,9 +201,33 @@ export default function AdminPage() {
     setVelocity(getAdminVelocity());
   }
 
-  // On mount: load from localStorage immediately (instant, always correct)
+  // On mount: load from localStorage immediately (instant), then pull from Supabase
   useEffect(() => {
     refreshLocal();
+
+    // Background: pull fresh data from Supabase so web ↔ app stay in sync
+    (async () => {
+      try {
+        const [remoteTasks, remoteBacklog] = await Promise.all([
+          loadAdminTasksFromDB(),
+          loadAdminBacklogFromDB(),
+        ]);
+        // Only update if Supabase returned data (avoids wiping local with empty)
+        if (remoteTasks.length > 0 || remoteBacklog.length > 0) {
+          setTodayTasks(remoteTasks);
+          setBacklog(remoteBacklog);
+          // Cache to localStorage so future reads are fresh
+          const allRemote = [...remoteTasks, ...remoteBacklog];
+          const existingLocal = loadAllAdminTasks();
+          // Merge: keep any local-only tasks (not yet in Supabase), add remote tasks
+          const remoteIds = new Set(allRemote.map((t) => t.id));
+          const localOnly = existingLocal.filter((t) => !remoteIds.has(t.id));
+          saveAllAdminTasks([...allRemote, ...localOnly]);
+        }
+      } catch {
+        // Supabase unavailable — localStorage data is already showing
+      }
+    })();
   }, []);
 
   const todayDone = todayTasks.filter((t) => t.completed).length;

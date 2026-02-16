@@ -149,7 +149,7 @@ export function loadAllAdminTasks(): AdminTask[] {
   }
 }
 
-function saveAllAdminTasks(tasks: AdminTask[]): void {
+export function saveAllAdminTasks(tasks: AdminTask[]): void {
   // Auto-clean completed backlog tasks older than 30 days
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 30);
