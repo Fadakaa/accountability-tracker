@@ -164,6 +164,21 @@ export async function loadStateFromDB(): Promise<LocalState> {
     const localHasData = localState.logs.length > 0 || localState.totalXp > 0;
 
     if (supabaseHasData) {
+      // Sprint reconciliation: localStorage is written synchronously and is always
+      // the freshest source for sprint state. If the user just ended a sprint,
+      // localStorage has activeSprint: null but the async Supabase write may not
+      // have landed yet. Trust localStorage's sprint state over Supabase's.
+      const localSprintIsNewer =
+        localState.activeSprint === null && state.activeSprint !== null;
+      const localHasMoreHistory =
+        (localState.sprintHistory?.length ?? 0) > (state.sprintHistory?.length ?? 0);
+
+      if (localSprintIsNewer || localHasMoreHistory) {
+        console.log("[db] Sprint reconciliation: trusting localStorage sprint state over Supabase");
+        state.activeSprint = localState.activeSprint;
+        state.sprintHistory = localState.sprintHistory ?? [];
+      }
+
       // Supabase has real data — cache it locally
       saveState(state);
       return state;

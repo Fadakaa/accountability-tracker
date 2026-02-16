@@ -367,16 +367,19 @@ function SprintDashboard({
       activeSprint: null,
     };
 
-    // Transition to summary FIRST — parent uses phase, not state.activeSprint
     setShowConfirm(false);
-    onEndSprint(archived);
 
-    // Persist in background — already transitioned so no race
+    // Persist FIRST — wait for both localStorage and Supabase write to land
+    // before transitioning. This prevents Supabase from still having the sprint
+    // as "active" when the user navigates to dashboard and triggers a fresh load.
     try {
       await dbSaveState(updated);
     } catch (err) {
       console.warn("[sprint] Save failed during end:", err);
     }
+
+    // Transition to summary AFTER save completes
+    onEndSprint(archived);
   }
 
   return (

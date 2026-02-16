@@ -29,6 +29,8 @@ const ALL_STORAGE_KEYS = [
 /** Wipe all app data from localStorage (called on sign-out to prevent data leaking between users) */
 export function clearAllLocalData() {
   if (typeof window === "undefined") return;
+  // Log a stack trace so we can diagnose unexpected clears
+  console.warn("[clearAllLocalData] CLEARING ALL DATA. Stack:", new Error().stack);
   for (const key of ALL_STORAGE_KEYS) {
     localStorage.removeItem(key);
   }
