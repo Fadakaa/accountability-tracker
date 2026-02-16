@@ -284,6 +284,19 @@ export async function saveStateToDB(state: LocalState): Promise<void> {
       }
     }
 
+    // Sync completed/cancelled sprints in history
+    // This handles the case where a sprint was just ended (activeSprint → null)
+    // and the archived sprint needs to be updated in Supabase so it's no longer "active".
+    if (state.sprintHistory && state.sprintHistory.length > 0) {
+      for (const historicSprint of state.sprintHistory) {
+        const { sprint, tasks } = sprintToRows(historicSprint, userId);
+        await dbUpsert("sprints", sprint, { onConflict: "id" });
+        if (tasks.length > 0) {
+          await dbUpsert("sprint_tasks", tasks, { onConflict: "id" });
+        }
+      }
+    }
+
     // Sync reflections
     if (state.reflections && state.reflections.length > 0) {
       const rows = state.reflections.map((r) => reflectionToRow(r, userId));
