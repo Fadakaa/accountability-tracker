@@ -22,6 +22,7 @@ import {
   loadSettings,
   saveSettings,
   recalculateStreaks,
+  getLevelForXP,
   DEFAULT_NOTIFICATION_SLOTS,
 } from "@/lib/store";
 import type { LocalState, UserSettings, DayLog } from "@/lib/store";
@@ -132,11 +133,17 @@ export function useDB(): UseDBResult {
       setSyncStatus("offline");
       setLoading(false);
 
-      // Background Supabase sync for Capacitor — always pull from Supabase when logged in
-      // so that web ↔ app data stays in sync (Supabase is the source of truth)
+      // Background Supabase sync for Capacitor — pull from Supabase when logged in
+      // so that web ↔ app data stays in sync. Merges carefully to avoid losing
+      // local data that hasn't been synced to Supabase yet.
       if (user && isOnline()) {
         (async () => {
           try {
+            // Flush any pending local writes to Supabase first
+            if (hasUnsyncedChanges()) {
+              await syncPendingOperations();
+            }
+
             const [remoteState, remoteSettings] = await Promise.all([
               loadStateFromDB(),
               loadSettingsFromDB(),
@@ -144,10 +151,52 @@ export function useDB(): UseDBResult {
             const remoteHasData = remoteState.logs.length > 0 || remoteState.totalXp > 0;
 
             if (remoteHasData) {
-              // Supabase has data — use it as source of truth
-              console.log("[useDB] Capacitor: syncing from Supabase");
-              setState(remoteState);
-              saveState(remoteState); // cache in localStorage
+              // Merge: prefer whichever has more data per-field
+              // This prevents Supabase from overwriting a local check-in that
+              // hasn't synced yet, while still picking up data from other devices.
+              const freshLocal = loadState();
+              const merged = { ...remoteState };
+
+              // Merge logs: keep the richer set of logs by date
+              const logsByDate = new Map<string, typeof merged.logs[0]>();
+              for (const log of remoteState.logs) logsByDate.set(log.date, log);
+              for (const log of freshLocal.logs) {
+                const existing = logsByDate.get(log.date);
+                if (!existing) {
+                  // Local has a log that Supabase doesn't — keep it
+                  logsByDate.set(log.date, log);
+                } else {
+                  // Both have a log for this date — keep whichever has more entries
+                  const localEntries = Object.keys(log.entries).length + Object.keys(log.badEntries).length;
+                  const remoteEntries = Object.keys(existing.entries).length + Object.keys(existing.badEntries).length;
+                  if (localEntries > remoteEntries) {
+                    logsByDate.set(log.date, log);
+                  }
+                }
+              }
+              merged.logs = Array.from(logsByDate.values()).sort((a, b) => b.date.localeCompare(a.date));
+
+              // Use higher XP and streaks
+              merged.totalXp = Math.max(freshLocal.totalXp, remoteState.totalXp);
+              merged.currentLevel = getLevelForXP(merged.totalXp).level;
+              merged.bareMinimumStreak = Math.max(freshLocal.bareMinimumStreak ?? 0, remoteState.bareMinimumStreak ?? 0);
+
+              // Merge streaks: keep the higher count for each habit
+              for (const [key, count] of Object.entries(freshLocal.streaks)) {
+                if ((merged.streaks[key] ?? 0) < count) {
+                  merged.streaks[key] = count;
+                }
+              }
+
+              // Sprint: trust localStorage (written synchronously, always freshest)
+              if (freshLocal.activeSprint === null && remoteState.activeSprint !== null) {
+                merged.activeSprint = null;
+                merged.sprintHistory = freshLocal.sprintHistory ?? [];
+              }
+
+              console.log("[useDB] Capacitor: merged local + Supabase data");
+              setState(merged);
+              saveState(merged);
               setSettings(remoteSettings);
               saveSettings(remoteSettings);
             }
