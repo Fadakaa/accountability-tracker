@@ -1,6 +1,6 @@
 // Multi-provider AI abstraction — wraps Claude, GPT, and Gemini APIs
 // Each provider is a simple fetch wrapper that normalizes the response.
-// These run SERVER-SIDE only (called from the API route).
+// Used server-side (API route) and also client-side in Capacitor (direct calls).
 
 export interface CoachMessage {
   role: "system" | "user" | "assistant";
@@ -151,4 +151,54 @@ export async function callProvider(
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
+}
+
+// ─── Local API Key Storage (for Capacitor / offline use) ─────
+
+const LOCAL_COACH_KEY = "accountability-coach-key";
+
+export interface LocalCoachConfig {
+  provider: ProviderName;
+  apiKey: string;
+  model?: string;
+}
+
+export function saveCoachKeyLocally(config: LocalCoachConfig): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(LOCAL_COACH_KEY, JSON.stringify(config));
+}
+
+export function loadCoachKeyLocally(): LocalCoachConfig | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(LOCAL_COACH_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as LocalCoachConfig;
+  } catch {
+    return null;
+  }
+}
+
+export function hasLocalCoachKey(): boolean {
+  return loadCoachKeyLocally() !== null;
+}
+
+export function clearCoachKeyLocally(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(LOCAL_COACH_KEY);
+}
+
+/** Call the AI provider directly from the client using the locally stored API key.
+ *  Used in Capacitor where the Vercel API route is not available. */
+export async function callProviderDirectly(
+  messages: CoachMessage[],
+  overrideProvider?: ProviderName,
+  overrideModel?: string,
+): Promise<CoachResponse> {
+  const config = loadCoachKeyLocally();
+  if (!config) throw new Error("No AI provider configured. Add your API key in Settings → AI Coach.");
+
+  const provider = overrideProvider || config.provider;
+  const model = overrideModel || config.model;
+  return callProvider(provider, messages, config.apiKey, model);
 }

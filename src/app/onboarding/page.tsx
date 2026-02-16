@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { supabase } from "@/lib/supabase";
 
@@ -92,6 +93,7 @@ Your Day 1 starts now. Let's go.`;
 // ─── Component ──────────────────────────────────────────────
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const { user } = useAuth();
   const [messages, setMessages] = useState<OnboardingMessage[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
@@ -190,7 +192,7 @@ export default function OnboardingPage() {
   }
 
   function handleStart() {
-    window.location.href = "/";
+    router.push("/");
   }
 
   const step = currentStep < STEPS.length ? STEPS[currentStep] : null;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useDB } from "@/hooks/useDB";
 import { getWeekLogs, getPrevWeekLogs, getMonthLogs } from "@/lib/store";
 import type { DayLog } from "@/lib/store";
@@ -117,9 +118,9 @@ export default function WeeklyPage() {
       {/* Header */}
       <header className="flex items-center justify-between mb-6">
         <div>
-          <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
+          <Link href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
             ← Dashboard
-          </a>
+          </Link>
           <h1 className="text-xl font-bold mt-1">
             {isWeekly ? "📊 Weekly Game" : "📊 Monthly Game"}
           </h1>
@@ -314,18 +315,18 @@ export default function WeeklyPage() {
 
       {/* Actions */}
       <div className="mt-auto pt-4 pb-4 space-y-3">
-        <a
+        <Link
           href="/wrap"
           className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold bg-brand hover:bg-brand-dark text-white transition-colors"
         >
           🎬 Weekly Wrap-Up
-        </a>
-        <a
+        </Link>
+        <Link
           href="/"
           className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 transition-colors"
         >
           🏠 Dashboard
-        </a>
+        </Link>
       </div>
     </div>
   );

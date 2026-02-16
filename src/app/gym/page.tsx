@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { getToday } from "@/lib/store";
 import type { GymSessionLocal, GymExerciseLocal, GymSetLocal, GymRoutine, GymRoutineExercise } from "@/lib/store";
 import type { TrainingType } from "@/types/database";
@@ -279,9 +280,9 @@ export default function GymPage() {
     return (
       <div className="flex flex-col min-h-screen px-4 py-6">
         <header className="mb-6">
-          <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
+          <Link href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
             ← Dashboard
-          </a>
+          </Link>
           <h1 className="text-xl font-bold mt-1">🏋️ Gym Log</h1>
         </header>
 
@@ -758,12 +759,12 @@ function CompletePhase({
       )}
 
       <div className="flex gap-3">
-        <a
+        <Link
           href="/"
           className="rounded-xl bg-surface-800 hover:bg-surface-700 px-6 py-3 text-sm font-medium transition-colors"
         >
           🏠 Dashboard
-        </a>
+        </Link>
         <button
           onClick={onLogAnother}
           className="rounded-xl bg-brand hover:bg-brand-dark px-6 py-3 text-sm font-bold text-white transition-colors"

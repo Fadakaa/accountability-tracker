@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 interface VoiceInputProps {
   onTranscript: (text: string) => void;
@@ -16,12 +16,52 @@ interface VoiceInputProps {
 export default function VoiceInput({ onTranscript, className = "", label = "🎤" }: VoiceInputProps) {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<ReturnType<typeof createRecognition> | null>(null);
 
+  // Check API support on mount so the button renders correctly from the start
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      !("webkitSpeechRecognition" in window) &&
+      !("SpeechRecognition" in window)
+    ) {
+      setSupported(false);
+    }
+  }, []);
+
+  // Cleanup: abort any active recognition session on unmount to prevent
+  // orphaned sessions that block future recognition attempts on mobile
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {
+          // Ignore — already stopped or destroyed
+        }
+        recognitionRef.current = null;
+      }
+    };
+  }, []);
+
   const startListening = useCallback(() => {
+    setError(null);
+
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
       setSupported(false);
       return;
+    }
+
+    // Abort any lingering session before creating a new one.
+    // Some mobile browsers only allow one active instance at a time.
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      recognitionRef.current = null;
     }
 
     const recognition = createRecognition();
@@ -32,7 +72,11 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
 
     recognitionRef.current = recognition;
 
-    recognition.continuous = true;
+    // continuous = false for reliable mobile behaviour.
+    // Mobile Safari does not support continuous mode well — sessions die
+    // immediately or after brief silence. For short dictations (notes,
+    // reflections) a single-utterance capture is the correct approach.
+    recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-GB";
 
@@ -48,25 +92,67 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
       }
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       setListening(false);
+      recognitionRef.current = null;
+
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        setError("Microphone blocked — check browser permissions");
+      } else if (event.error === "no-speech") {
+        // User didn't speak — not a real error, clear silently
+        setError(null);
+      } else if (event.error === "network") {
+        setError("Network error — speech recognition needs internet");
+      } else if (event.error === "aborted") {
+        // Intentional abort (e.g. navigating away) — not an error
+        setError(null);
+      } else {
+        setError("Voice input failed — try again");
+      }
     };
 
     recognition.onend = () => {
       setListening(false);
+      recognitionRef.current = null;
     };
 
-    recognition.start();
-    setListening(true);
+    // Wrap start() in try/catch — on mobile this can throw if permissions
+    // are in a bad state or another recognition instance is still active.
+    try {
+      recognition.start();
+      setListening(true);
+    } catch {
+      setListening(false);
+      recognitionRef.current = null;
+      setError("Could not start voice input — try again");
+    }
   }, [onTranscript]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // Ignore — already stopped
+      }
       recognitionRef.current = null;
     }
     setListening(false);
   }, []);
+
+  // Click handler that stops event propagation so parent touch/click
+  // handlers (e.g. the coach page swipe navigation) don't interfere.
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+      if (listening) {
+        stopListening();
+      } else {
+        startListening();
+      }
+    },
+    [listening, startListening, stopListening]
+  );
 
   if (!supported) {
     // Show disabled state so user knows the feature exists but isn't available
@@ -83,18 +169,26 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
   }
 
   return (
-    <button
-      type="button"
-      onClick={listening ? stopListening : startListening}
-      className={`rounded-lg transition-all active:scale-95 ${
-        listening
-          ? "bg-missed text-white animate-pulse"
-          : "bg-surface-700 text-neutral-400 hover:text-neutral-200"
-      } ${className}`}
-      title={listening ? "Stop recording" : "Voice input"}
-    >
-      {listening ? "⏹️ Stop" : label}
-    </button>
+    <div className="inline-flex flex-col items-end">
+      <button
+        type="button"
+        onClick={handleClick}
+        onTouchEnd={(e) => e.stopPropagation()}
+        className={`rounded-lg transition-all active:scale-95 ${
+          listening
+            ? "bg-missed text-white animate-pulse"
+            : "bg-surface-700 text-neutral-400 hover:text-neutral-200"
+        } ${className}`}
+        title={listening ? "Stop recording" : "Voice input"}
+      >
+        {listening ? "⏹️ Stop" : label}
+      </button>
+      {error && (
+        <span className="text-xs text-missed mt-1 max-w-[200px] text-right">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -119,4 +213,9 @@ interface SpeechRecognitionEvent {
       };
     };
   };
+}
+
+// Type declaration for SpeechRecognitionErrorEvent
+interface SpeechRecognitionErrorEvent {
+  error: string;
 }

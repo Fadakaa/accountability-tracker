@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { getTodayLog, getLevelForXP } from "@/lib/store";
 import type { AdminTask, ShowingUpData } from "@/lib/store";
 import { getFlameIcon, getQuoteOfTheDay, getContextualQuote } from "@/lib/habits";
@@ -10,6 +12,8 @@ import { isBinaryLike } from "@/types/database";
 import { getWeakHabits } from "@/lib/weakness";
 import type { WeakHabit } from "@/lib/weakness";
 import { startNotificationScheduler, getNotificationPermission, syncScheduleToServiceWorker, syncCompletionToServiceWorker } from "@/lib/notifications";
+import { isCapacitor } from "@/lib/capacitorUtils";
+import { requestNativeNotificationPermission, rescheduleAllNativeNotifications, setupNativeNotificationListeners, setupAppResumeListener } from "@/lib/nativeNotifications";
 import { getNextCheckinDisplay } from "@/lib/schedule";
 import { getDailyCompletionStats, getBadHabitStats, getWeekLogsFromArray, formatBadHabitDisplay } from "@/lib/completion";
 import NotificationBanner from "@/components/NotificationBanner";
@@ -18,21 +22,23 @@ import { useDB } from "@/hooks/useDB";
 import { loadAdminTasksFromDB, recordAppOpenToDB } from "@/lib/db";
 
 export default function Home() {
+  const router = useRouter();
   const { state, settings, dbHabits, loading } = useDB();
   const [weakHabits, setWeakHabits] = useState<WeakHabit[]>([]);
   const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
   const [nextCheckin, setNextCheckin] = useState<string>("");
   const [showingUp, setShowingUp] = useState<ShowingUpData | null>(null);
 
-  // Redirect new users to onboarding
+  // Redirect new users to onboarding (web only — skip in Capacitor)
   useEffect(() => {
     if (loading) return;
+    if (isCapacitor()) return; // Skip onboarding redirect in native app
     const isNew = state.totalXp === 0 && state.logs.length === 0;
-    const hasOnboarded = typeof window !== "undefined" && localStorage.getItem("accountability-onboarded") === "true";
+    const hasOnboarded = localStorage.getItem("accountability-onboarded") === "true";
     if (isNew && !hasOnboarded) {
-      window.location.href = "/onboarding";
+      router.push("/onboarding");
     }
-  }, [loading, state.totalXp, state.logs.length]);
+  }, [loading, state.totalXp, state.logs.length, router]);
 
   useEffect(() => {
     if (loading) return;
@@ -47,10 +53,22 @@ export default function Home() {
     loadAdminTasksFromDB().then(setAdminTasks);
     recordAppOpenToDB().then(setShowingUp);
 
-    if (getNotificationPermission() === "granted") {
-      startNotificationScheduler();
-      syncScheduleToServiceWorker();
-      syncCompletionToServiceWorker();
+    if (isCapacitor()) {
+      // Native iOS notifications
+      requestNativeNotificationPermission().then(async (granted) => {
+        if (granted) {
+          await rescheduleAllNativeNotifications();
+          setupNativeNotificationListeners();
+          setupAppResumeListener();
+        }
+      });
+    } else {
+      // Web notifications (browser + ntfy.sh)
+      if (getNotificationPermission() === "granted") {
+        startNotificationScheduler();
+        syncScheduleToServiceWorker();
+        syncCompletionToServiceWorker();
+      }
     }
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -99,9 +117,9 @@ export default function Home() {
             <span className="text-xs text-neutral-400">
               {state?.totalXp ?? 0} / {levelInfo.nextXp} XP
             </span>
-            <a href="/settings" className="text-neutral-500 hover:text-neutral-300 text-lg">
+            <Link href="/settings" className="text-neutral-500 hover:text-neutral-300 text-lg">
               ⚙️
-            </a>
+            </Link>
           </div>
         </div>
         <div className="w-full h-2 rounded-full bg-surface-700">
@@ -123,7 +141,7 @@ export default function Home() {
 
       {/* Sprint Mode Banner */}
       {state?.activeSprint && state.activeSprint.status === "active" && (
-        <a
+        <Link
           href="/sprint"
           className="mx-0 mb-4 block rounded-xl bg-brand/10 border border-brand/30 px-4 py-3"
         >
@@ -137,7 +155,7 @@ export default function Home() {
             </span>
           </div>
           <div className="text-xs text-neutral-300 mt-1">{state.activeSprint.name}</div>
-        </a>
+        </Link>
       )}
 
       {/* Progress Rings */}
@@ -148,7 +166,7 @@ export default function Home() {
       </section>
 
       {/* Admin Tasks — always visible, links to /admin */}
-      <a href="/admin" className="block rounded-xl bg-surface-800 border border-blue-900/30 p-4 mb-6 hover:bg-surface-700/80 transition-colors">
+      <Link href="/admin" className="block rounded-xl bg-surface-800 border border-blue-900/30 p-4 mb-6 hover:bg-surface-700/80 transition-colors">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
             📋 General Admin
@@ -193,7 +211,7 @@ export default function Home() {
             No tasks for today. Tap to add tasks or focus from your backlog.
           </p>
         )}
-      </a>
+      </Link>
 
       {/* Top Streaks — Dynamic */}
       <section className="mb-6">
@@ -224,12 +242,12 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <a
+          <Link
             href="/checkin"
             className="mt-3 block text-center text-xs text-brand hover:text-brand-dark font-medium transition-colors"
           >
             Log now to improve →
-          </a>
+          </Link>
         </section>
       )}
 
@@ -461,50 +479,50 @@ function NavTile({
   if (accent) {
     // Execute group — bold, brand-coloured, taller
     return (
-      <a
+      <Link
         href={href}
         className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-brand hover:bg-brand-dark py-4 text-white font-bold transition-all active:scale-[0.97]"
       >
         <span className="text-xl">{icon}</span>
         <span className="text-[11px] tracking-wide">{label}</span>
-      </a>
+      </Link>
     );
   }
 
   if (compact) {
     // Reflect group — slim, icon-forward
     return (
-      <a
+      <Link
         href={href}
         className="flex flex-col items-center justify-center gap-1 rounded-xl bg-surface-800 hover:bg-surface-700 py-3 transition-all active:scale-[0.97]"
       >
         <span className="text-lg">{icon}</span>
         <span className="text-[10px] text-neutral-400 font-medium">{label}</span>
-      </a>
+      </Link>
     );
   }
 
   if (subtle) {
     // Design group — understated, horizontal
     return (
-      <a
+      <Link
         href={href}
         className="flex items-center justify-center gap-2 rounded-xl bg-surface-800/60 border border-surface-700/50 hover:bg-surface-700 py-2.5 transition-all active:scale-[0.97]"
       >
         <span className="text-sm">{icon}</span>
         <span className="text-xs text-neutral-500 font-medium">{label}</span>
-      </a>
+      </Link>
     );
   }
 
   // Default (Execute non-accent)
   return (
-    <a
+    <Link
       href={href}
       className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-surface-800 hover:bg-surface-700 py-4 transition-all active:scale-[0.97]"
     >
       <span className="text-xl">{icon}</span>
       <span className="text-[11px] text-neutral-300 font-medium tracking-wide">{label}</span>
-    </a>
+    </Link>
   );
 }

@@ -7,7 +7,7 @@ import type { HabitStack } from "@/types/database";
 import type { Habit } from "@/types/database";
 import { isBinaryLike } from "@/types/database";
 import type { DayLog } from "./store";
-import { loadSettings, getToday } from "./store";
+import { loadSettings, getToday, DEFAULT_NOTIFICATION_SLOTS } from "./store";
 
 // ─── Stack Boundaries ──────────────────────────────────────
 // These define which hours belong to which stack.
@@ -78,7 +78,11 @@ export function getCurrentTime(): string {
  *  so the dashboard matches what the user configured in Settings. */
 export function getNextCheckinDisplay(): string {
   const settings = loadSettings();
-  const slots = (settings.notificationSlots ?? [])
+  const rawSlots = settings.notificationSlots;
+  // Fallback to default slots if notificationSlots is empty/missing
+  // (matches the same fallback used by NotificationScheduleEditor in settings)
+  const sourceSlots = rawSlots && rawSlots.length > 0 ? rawSlots : DEFAULT_NOTIFICATION_SLOTS;
+  const slots = sourceSlots
     .filter((s: { enabled: boolean }) => s.enabled)
     .sort((a: { ukHour: number; ukMinute: number }, b: { ukHour: number; ukMinute: number }) =>
       a.ukHour * 60 + a.ukMinute - (b.ukHour * 60 + b.ukMinute)

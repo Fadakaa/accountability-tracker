@@ -38,13 +38,21 @@ export function dayLogToRows(dayLog: DayLog, userId: string): DayLogRows {
 
   // Regular habit entries → daily_logs rows
   for (const [habitId, entry] of Object.entries(dayLog.entries)) {
+    // Serialize miss reason data into notes field (avoids DB migration)
+    let notes: string | null = null;
+    if (entry.missCategory || entry.missReason) {
+      notes = JSON.stringify({
+        ...(entry.missCategory ? { missCategory: entry.missCategory } : {}),
+        ...(entry.missReason ? { missReason: entry.missReason } : {}),
+      });
+    }
     dailyLogs.push({
       user_id: userId,
       habit_id: habitId,
       log_date: dayLog.date,
       status: entry.status,
       value: entry.value,
-      notes: null,
+      notes,
       logged_at: dayLog.submittedAt || new Date().toISOString(),
     });
   }
@@ -291,6 +299,9 @@ export function adminTaskToRow(task: AdminTask, userId: string) {
     in_backlog: task.inBacklog,
     completed_at: task.completedAt || null,
     created_at: task.createdAt || new Date().toISOString(),
+    due_date: task.dueDate || null,
+    consequence: task.consequence || null,
+    severity: task.severity || null,
   };
 }
 
@@ -303,6 +314,9 @@ export function rowToAdminTask(row: {
   in_backlog: boolean;
   completed_at: string | null;
   created_at: string;
+  due_date?: string | null;
+  consequence?: string | null;
+  severity?: string | null;
 }): AdminTask {
   return {
     id: row.id,
@@ -313,6 +327,9 @@ export function rowToAdminTask(row: {
     inBacklog: row.in_backlog,
     completedAt: row.completed_at,
     createdAt: row.created_at,
+    ...(row.due_date && { dueDate: row.due_date }),
+    ...(row.consequence && { consequence: row.consequence }),
+    ...(row.severity && { severity: row.severity as AdminTask["severity"] }),
   };
 }
 

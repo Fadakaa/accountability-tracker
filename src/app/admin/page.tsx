@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import Link from "next/link";
 import {
   addAdminTask,
   toggleAdminTask,
@@ -9,12 +10,163 @@ import {
   unfocusBacklogTask,
   getToday,
   getCompletedAdminHistory,
+  getAdminVelocity,
   loadAllAdminTasks,
+  loadAdminTasks as loadAdminTasksLocal,
+  loadAdminBacklog as loadAdminBacklogLocal,
 } from "@/lib/store";
-import type { AdminTask } from "@/lib/store";
-import { loadAdminTasksFromDB, loadAdminBacklogFromDB, saveAdminTaskToDB, deleteAdminTaskFromDB } from "@/lib/db";
+import type { AdminTask, AdminVelocity, TaskSeverity } from "@/lib/store";
+import { saveAdminTaskToDB, deleteAdminTaskFromDB } from "@/lib/db";
+import { VelocityStats, SlippingBanner } from "@/components/AdminVelocity";
 
 type Tab = "today" | "backlog" | "history";
+
+// ─── Severity helpers ────────────────────────────────────────
+
+const SEVERITY_CONFIG: Record<TaskSeverity, { label: string; color: string; bg: string; border: string }> = {
+  low: { label: "LOW", color: "text-neutral-400", bg: "bg-neutral-700/50", border: "border-neutral-600" },
+  medium: { label: "MED", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" },
+  high: { label: "HIGH", color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30" },
+  critical: { label: "CRIT", color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30" },
+};
+
+function SeverityBadge({ severity }: { severity: TaskSeverity }) {
+  const cfg = SEVERITY_CONFIG[severity];
+  return (
+    <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${cfg.color} ${cfg.bg} border ${cfg.border} shrink-0 leading-none`}>
+      {cfg.label}
+    </span>
+  );
+}
+
+// ─── Due date helpers ────────────────────────────────────────
+
+function getDueDateInfo(dueDate: string): { label: string; isOverdue: boolean; daysAway: number } {
+  const today = new Date(getToday() + "T12:00:00");
+  const due = new Date(dueDate + "T12:00:00");
+  const diffMs = due.getTime() - today.getTime();
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return { label: `OVERDUE ${Math.abs(diffDays)}d`, isOverdue: true, daysAway: diffDays };
+  } else if (diffDays === 0) {
+    return { label: "Due today", isOverdue: false, daysAway: 0 };
+  } else if (diffDays === 1) {
+    return { label: "Due tomorrow", isOverdue: false, daysAway: 1 };
+  } else {
+    return { label: `Due in ${diffDays}d`, isOverdue: false, daysAway: diffDays };
+  }
+}
+
+function DueDateLabel({ dueDate, completed }: { dueDate: string; completed: boolean }) {
+  const info = getDueDateInfo(dueDate);
+  if (completed) {
+    return <span className="text-[9px] text-neutral-600 shrink-0">{info.label}</span>;
+  }
+  if (info.isOverdue) {
+    return <span className="text-[9px] text-red-400 font-bold shrink-0 animate-pulse">{info.label}</span>;
+  }
+  if (info.daysAway === 0) {
+    return <span className="text-[9px] text-amber-400 font-medium shrink-0">{info.label}</span>;
+  }
+  if (info.daysAway <= 2) {
+    return <span className="text-[9px] text-amber-500/70 shrink-0">{info.label}</span>;
+  }
+  return <span className="text-[9px] text-neutral-500 shrink-0">{info.label}</span>;
+}
+
+function TaskMetaBadges({ task }: { task: AdminTask }) {
+  return (
+    <>
+      {task.severity && <SeverityBadge severity={task.severity} />}
+      {task.dueDate && <DueDateLabel dueDate={task.dueDate} completed={task.completed} />}
+    </>
+  );
+}
+
+function isTaskOverdue(task: AdminTask): boolean {
+  if (!task.dueDate || task.completed) return false;
+  return getDueDateInfo(task.dueDate).isOverdue;
+}
+
+// ─── Expandable details section for task creation ────────────
+
+function TaskDetailsSection({
+  dueDate,
+  setDueDate,
+  consequence,
+  setConsequence,
+  severity,
+  setSeverity,
+}: {
+  dueDate: string;
+  setDueDate: (v: string) => void;
+  consequence: string;
+  setConsequence: (v: string) => void;
+  severity: TaskSeverity | "";
+  setSeverity: (v: TaskSeverity | "") => void;
+}) {
+  return (
+    <div className="space-y-2 py-2 px-1">
+      {/* Due date */}
+      <div className="flex items-center gap-2">
+        <label className="text-[10px] text-neutral-500 w-16 shrink-0">Due date</label>
+        <input
+          type="date"
+          value={dueDate}
+          onChange={(e) => setDueDate(e.target.value)}
+          className="flex-1 bg-surface-700 rounded-md px-2 py-1.5 text-xs text-white outline-none focus:ring-1 focus:ring-blue-500/50 [color-scheme:dark]"
+        />
+        {dueDate && (
+          <button
+            onClick={() => setDueDate("")}
+            className="text-[10px] text-neutral-600 hover:text-neutral-400"
+          >
+            clear
+          </button>
+        )}
+      </div>
+
+      {/* Severity */}
+      <div className="flex items-center gap-2">
+        <label className="text-[10px] text-neutral-500 w-16 shrink-0">Severity</label>
+        <div className="flex gap-1">
+          {(["low", "medium", "high", "critical"] as TaskSeverity[]).map((s) => {
+            const cfg = SEVERITY_CONFIG[s];
+            const isSelected = severity === s;
+            return (
+              <button
+                key={s}
+                onClick={() => setSeverity(isSelected ? "" : s)}
+                className={`text-[9px] font-bold px-2 py-1 rounded border transition-all ${
+                  isSelected
+                    ? `${cfg.color} ${cfg.bg} ${cfg.border}`
+                    : "text-neutral-600 bg-surface-700/50 border-surface-600 hover:text-neutral-400"
+                }`}
+              >
+                {cfg.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Consequence */}
+      <div className="flex items-start gap-2">
+        <label className="text-[10px] text-neutral-500 w-16 shrink-0 mt-1.5">If missed</label>
+        <input
+          type="text"
+          value={consequence}
+          onChange={(e) => setConsequence(e.target.value)}
+          placeholder="e.g., Late payment fee"
+          className="flex-1 bg-surface-700 rounded-md px-2 py-1.5 text-xs text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-blue-500/50"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ──────────────────────────────────────────
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("today");
@@ -23,18 +175,34 @@ export default function AdminPage() {
   const [newTaskText, setNewTaskText] = useState("");
   const [showAddInput, setShowAddInput] = useState(false);
   const [showFocusPicker, setShowFocusPicker] = useState(false);
+  const [velocity, setVelocity] = useState<AdminVelocity | null>(null);
 
-  async function refresh() {
-    const [tasks, bl] = await Promise.all([
-      loadAdminTasksFromDB(),
-      loadAdminBacklogFromDB(),
-    ]);
-    setTodayTasks(tasks);
-    setBacklog(bl);
+  // Details section state
+  const [showDetails, setShowDetails] = useState(false);
+  const [detailDueDate, setDetailDueDate] = useState("");
+  const [detailConsequence, setDetailConsequence] = useState("");
+  const [detailSeverity, setDetailSeverity] = useState<TaskSeverity | "">("");
+
+  // Expanded consequence view per-task
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+
+  const resetDetails = useCallback(() => {
+    setShowDetails(false);
+    setDetailDueDate("");
+    setDetailConsequence("");
+    setDetailSeverity("");
+  }, []);
+
+  // Read from localStorage — this is always the freshest source after any action
+  function refreshLocal() {
+    setTodayTasks(loadAdminTasksLocal());
+    setBacklog(loadAdminBacklogLocal());
+    setVelocity(getAdminVelocity());
   }
 
+  // On mount: load from localStorage immediately (instant, always correct)
   useEffect(() => {
-    refresh();
+    refreshLocal();
   }, []);
 
   const todayDone = todayTasks.filter((t) => t.completed).length;
@@ -49,41 +217,51 @@ export default function AdminPage() {
 
   function handleAddTask(target: "today" | "backlog") {
     if (!newTaskText.trim()) return;
-    const task = addAdminTask(newTaskText.trim(), target === "backlog" ? "backlog" : "adhoc");
-    saveAdminTaskToDB(task);
+    const details = (detailDueDate || detailConsequence || detailSeverity)
+      ? {
+          ...(detailDueDate && { dueDate: detailDueDate }),
+          ...(detailConsequence && { consequence: detailConsequence }),
+          ...(detailSeverity && { severity: detailSeverity as TaskSeverity }),
+        }
+      : undefined;
+    const task = addAdminTask(
+      newTaskText.trim(),
+      target === "backlog" ? "backlog" : "adhoc",
+      undefined,
+      details,
+    );
     setNewTaskText("");
     setShowAddInput(false);
-    refresh();
+    resetDetails();
+    refreshLocal(); // instant UI update from localStorage
+    saveAdminTaskToDB(task).catch(() => {}); // background Supabase sync
   }
 
   function handleFocus(taskId: string) {
-    focusBacklogTask(taskId);
-    // Sync updated task to DB in background — don't block the UI
+    focusBacklogTask(taskId); // writes to localStorage
+    refreshLocal(); // instant UI update
     const updated = loadAllAdminTasks().find((t) => t.id === taskId);
-    if (updated) saveAdminTaskToDB(updated);
-    refresh();
+    if (updated) saveAdminTaskToDB(updated).catch(() => {}); // background sync
   }
 
   function handleUnfocus(taskId: string) {
-    unfocusBacklogTask(taskId);
-    // Sync updated task to DB in background
+    unfocusBacklogTask(taskId); // writes to localStorage
+    refreshLocal(); // instant UI update
     const updated = loadAllAdminTasks().find((t) => t.id === taskId);
-    if (updated) saveAdminTaskToDB(updated);
-    refresh();
+    if (updated) saveAdminTaskToDB(updated).catch(() => {}); // background sync
   }
 
   function handleToggle(taskId: string) {
-    toggleAdminTask(taskId);
-    // Sync updated task to DB in background
+    toggleAdminTask(taskId); // writes to localStorage
+    refreshLocal(); // instant UI update
     const updated = loadAllAdminTasks().find((t) => t.id === taskId);
-    if (updated) saveAdminTaskToDB(updated);
-    refresh();
+    if (updated) saveAdminTaskToDB(updated).catch(() => {}); // background sync
   }
 
   function handleRemove(taskId: string) {
-    removeAdminTask(taskId);
-    deleteAdminTaskFromDB(taskId);
-    refresh();
+    removeAdminTask(taskId); // writes to localStorage
+    refreshLocal(); // instant UI update
+    deleteAdminTaskFromDB(taskId).catch(() => {}); // background sync
   }
 
   // Completed admin history
@@ -98,9 +276,9 @@ export default function AdminPage() {
             <span className="text-lg">📋</span>
             <h1 className="text-lg font-bold">General Admin</h1>
           </div>
-          <a href="/" className="text-neutral-500 text-xs hover:text-neutral-300">
+          <Link href="/" className="text-neutral-500 text-xs hover:text-neutral-300">
             Dashboard
-          </a>
+          </Link>
         </div>
         <p className="text-sm text-neutral-400">
           Your to-do list. Add tasks to the backlog, focus on what matters today.
@@ -120,6 +298,12 @@ export default function AdminPage() {
           />
         </div>
       </div>
+
+      {/* Velocity Stats */}
+      {velocity && <VelocityStats velocity={velocity} />}
+
+      {/* Slipping Tasks Warning */}
+      {velocity && <SlippingBanner velocity={velocity} />}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 bg-surface-800 rounded-xl p-1">
@@ -159,7 +343,7 @@ export default function AdminPage() {
                   {showFocusPicker ? "Done" : "+ From backlog"}
                 </button>
                 <button
-                  onClick={() => { setShowAddInput(!showAddInput); setShowFocusPicker(false); }}
+                  onClick={() => { setShowAddInput(!showAddInput); setShowFocusPicker(false); resetDetails(); }}
                   className="text-[10px] text-brand hover:text-brand-light font-medium"
                 >
                   + New
@@ -169,22 +353,44 @@ export default function AdminPage() {
 
             {/* Add new task inline */}
             {showAddInput && (
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="text"
-                  value={newTaskText}
-                  onChange={(e) => setNewTaskText(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleAddTask("today")}
-                  placeholder="New task for today..."
-                  className="flex-1 bg-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder-neutral-600 outline-none focus:ring-2 focus:ring-blue-500/50"
-                  autoFocus
-                />
+              <div className="mb-3">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newTaskText}
+                    onChange={(e) => setNewTaskText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !showDetails) handleAddTask("today");
+                    }}
+                    placeholder="New task for today..."
+                    className="flex-1 bg-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder-neutral-600 outline-none focus:ring-2 focus:ring-blue-500/50"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => handleAddTask("today")}
+                    className="rounded-lg bg-blue-500/20 text-blue-400 px-3 py-2 text-xs font-bold hover:bg-blue-500/30"
+                  >
+                    Add
+                  </button>
+                </div>
                 <button
-                  onClick={() => handleAddTask("today")}
-                  className="rounded-lg bg-blue-500/20 text-blue-400 px-3 py-2 text-xs font-bold hover:bg-blue-500/30"
+                  onClick={() => setShowDetails(!showDetails)}
+                  className="text-[10px] text-neutral-600 hover:text-neutral-400 mt-1.5 ml-1 transition-colors"
                 >
-                  Add
+                  {showDetails ? "Hide details" : "+ Add details (due date, severity...)"}
                 </button>
+                {showDetails && (
+                  <div className="mt-1 rounded-lg bg-surface-700/30 border border-surface-600 p-2">
+                    <TaskDetailsSection
+                      dueDate={detailDueDate}
+                      setDueDate={setDetailDueDate}
+                      consequence={detailConsequence}
+                      setConsequence={setDetailConsequence}
+                      severity={detailSeverity}
+                      setSeverity={setDetailSeverity}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -204,11 +410,12 @@ export default function AdminPage() {
                       <div key={task.id} className="flex items-center gap-2">
                         <button
                           onClick={() => handleFocus(task.id)}
-                          className="text-[10px] text-blue-400 hover:text-blue-300 font-bold shrink-0"
+                          className="text-[11px] text-blue-400 hover:text-blue-300 active:text-blue-200 font-bold shrink-0 px-2 py-1.5 -my-1"
                         >
                           + Focus
                         </button>
                         <span className="text-xs text-neutral-400 flex-1">{task.title}</span>
+                        <TaskMetaBadges task={task} />
                       </div>
                     ))}
                   </div>
@@ -229,10 +436,10 @@ export default function AdminPage() {
                 <div key={task.id} className="flex items-center gap-2 py-1.5 group">
                   <button
                     onClick={() => handleToggle(task.id)}
-                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${
+                    className={`w-6 h-6 rounded-md border-2 flex items-center justify-center shrink-0 ${
                       task.completed
                         ? "bg-done border-done text-white"
-                        : "border-neutral-600 hover:border-neutral-400"
+                        : "border-neutral-600 hover:border-neutral-400 active:border-neutral-300"
                     }`}
                   >
                     {task.completed && (
@@ -250,20 +457,18 @@ export default function AdminPage() {
                   {task.source === "planned" && (
                     <span className="text-[9px] text-amber-500/50 shrink-0">planned</span>
                   )}
-                  <div className="hidden group-hover:flex items-center gap-1">
+                  <div className="flex items-center gap-0">
                     {task.inBacklog && (
                       <button
                         onClick={() => handleUnfocus(task.id)}
-                        className="text-[10px] text-neutral-600 hover:text-neutral-400"
-                        title="Remove from today (keep in backlog)"
+                        className="text-[11px] text-neutral-500 hover:text-neutral-300 active:text-neutral-200 px-2 py-1.5 -my-1"
                       >
                         unfocus
                       </button>
                     )}
                     <button
                       onClick={() => handleRemove(task.id)}
-                      className="text-[10px] text-neutral-600 hover:text-red-400"
-                      title="Delete permanently"
+                      className="text-sm text-neutral-600 hover:text-red-400 active:text-red-400 px-2 py-1.5 -my-1"
                     >
                       ✕
                     </button>
@@ -274,12 +479,12 @@ export default function AdminPage() {
           </section>
 
           {/* Quick actions */}
-          <a
+          <Link
             href="/checkin"
             className="w-full rounded-xl bg-brand hover:bg-brand-dark text-white text-sm font-bold py-3 text-center transition-colors active:scale-[0.98] block"
           >
             📝 Go to Check-in
-          </a>
+          </Link>
         </>
       )}
 
@@ -337,25 +542,25 @@ export default function AdminPage() {
                     {isFocused ? "🎯" : "○"}
                   </span>
                   <span className="text-sm flex-1 text-neutral-300">{task.title}</span>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0">
                     {isFocused ? (
                       <button
                         onClick={() => handleUnfocus(task.id)}
-                        className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+                        className="text-[11px] text-blue-400 hover:text-blue-300 active:text-blue-200 font-medium px-2 py-1.5 -my-1"
                       >
                         Unfocus
                       </button>
                     ) : (
                       <button
                         onClick={() => handleFocus(task.id)}
-                        className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+                        className="text-[11px] text-blue-400 hover:text-blue-300 active:text-blue-200 font-medium px-2 py-1.5 -my-1"
                       >
                         Focus today
                       </button>
                     )}
                     <button
                       onClick={() => handleRemove(task.id)}
-                      className="text-[10px] text-neutral-700 hover:text-red-400 hidden group-hover:block"
+                      className="text-sm text-neutral-600 hover:text-red-400 active:text-red-400 px-2 py-1.5 -my-1"
                     >
                       ✕
                     </button>

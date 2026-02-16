@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 import { useDB } from "@/hooks/useDB";
 import type { ChainItem } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -97,9 +98,9 @@ export default function RoutinePage() {
     <div className="flex flex-col min-h-screen px-4 py-6">
       {/* Header */}
       <header className="mb-4">
-        <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
+        <Link href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
           ← Dashboard
-        </a>
+        </Link>
         <h1 className="text-xl font-bold mt-1">🔗 My Routine</h1>
       </header>
 
@@ -173,12 +174,12 @@ export default function RoutinePage() {
 
       {/* Back */}
       <div className="mt-auto pt-6 pb-4">
-        <a
+        <Link
           href="/"
           className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 transition-colors"
         >
           🏠 Dashboard
-        </a>
+        </Link>
       </div>
     </div>
   );

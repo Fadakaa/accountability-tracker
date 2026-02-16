@@ -83,6 +83,8 @@ export function isDeferredAway(habitId: string): boolean {
 }
 
 // ─── Admin Tasks (daily to-do items) ─────────────────────
+export type TaskSeverity = "low" | "medium" | "high" | "critical";
+
 export interface AdminTask {
   id: string;
   title: string;
@@ -92,6 +94,9 @@ export interface AdminTask {
   completedAt: string | null;
   createdAt: string;
   inBacklog: boolean;     // true = lives in backlog (may also be focused today)
+  dueDate?: string;       // optional ISO date string (YYYY-MM-DD) — when the task must be done
+  consequence?: string;   // free-text describing what happens if not done (e.g., "Late payment fee £25")
+  severity?: TaskSeverity; // impact level: low | medium | high | critical
 }
 
 // ─── Admin Task Store ─────────────────────────────────────────
@@ -156,7 +161,12 @@ function saveAllAdminTasks(tasks: AdminTask[]): void {
   localStorage.setItem(ADMIN_KEY, JSON.stringify(cleaned));
 }
 
-export function addAdminTask(title: string, source: "adhoc" | "planned" | "backlog", date?: string): AdminTask {
+export function addAdminTask(
+  title: string,
+  source: "adhoc" | "planned" | "backlog",
+  date?: string,
+  details?: { dueDate?: string; consequence?: string; severity?: TaskSeverity },
+): AdminTask {
   const all = loadAllAdminTasks();
   const isBacklog = source === "backlog";
   const task: AdminTask = {
@@ -168,6 +178,9 @@ export function addAdminTask(title: string, source: "adhoc" | "planned" | "backl
     completedAt: null,
     createdAt: new Date().toISOString(),
     inBacklog: isBacklog,
+    ...(details?.dueDate && { dueDate: details.dueDate }),
+    ...(details?.consequence && { consequence: details.consequence }),
+    ...(details?.severity && { severity: details.severity }),
   };
   all.push(task);
   saveAllAdminTasks(all);
@@ -238,9 +251,149 @@ export function getCompletedAdminHistory(): { date: string; completed: number; t
     .sort((a, b) => b.date.localeCompare(a.date));
 }
 
+// ─── Admin Velocity & Slipping Tasks ─────────────────────
+
+export interface SlippingTask {
+  task: AdminTask;
+  ageDays: number;
+}
+
+export interface AdminVelocity {
+  // Today's stats
+  completedToday: number;
+  totalToday: number;
+  // Rolling 7-day averages
+  avgCompletedPerDay: number;   // tasks completed per day over last 7 days
+  avgAddedPerDay: number;       // tasks created per day over last 7 days
+  // Drag-over: incomplete tasks from previous days
+  dragOverCount: number;
+  // Health: "green" (completing > adding), "amber" (roughly even), "red" (backlog growing)
+  health: "green" | "amber" | "red";
+  // Slipping tasks (in backlog > 3 days)
+  slippingTasks: SlippingTask[];
+}
+
+/** Identify tasks that have been in the backlog for more than `thresholdDays` days without being completed. */
+export function getSlippingTasks(thresholdDays: number = 3): SlippingTask[] {
+  const all = loadAllAdminTasks();
+  const now = new Date();
+  const results: SlippingTask[] = [];
+
+  for (const task of all) {
+    // Only consider incomplete tasks
+    if (task.completed) continue;
+
+    // Parse the creation date — createdAt is an ISO string
+    const createdDate = new Date(task.createdAt);
+    if (isNaN(createdDate.getTime())) continue;
+
+    const ageDays = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (ageDays > thresholdDays) {
+      results.push({ task, ageDays });
+    }
+  }
+
+  // Sort by age descending (oldest first)
+  results.sort((a, b) => b.ageDays - a.ageDays);
+  return results;
+}
+
+/** Calculate completion rate vs creation rate over the last 7 days. */
+export function getAdminVelocity(): AdminVelocity {
+  const all = loadAllAdminTasks();
+  const today = getToday();
+  const now = new Date();
+
+  // Build date strings for the last 7 days
+  const last7Dates: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    last7Dates.push(d.toISOString().slice(0, 10));
+  }
+  const oldestDate = last7Dates[last7Dates.length - 1];
+
+  // Today's stats
+  const todayTasks = all.filter((t) => t.date === today);
+  const completedToday = todayTasks.filter((t) => t.completed).length;
+  const totalToday = todayTasks.length;
+
+  // Count tasks completed in the last 7 days
+  let completedLast7 = 0;
+  for (const task of all) {
+    if (!task.completed || !task.completedAt) continue;
+    const completedDate = task.completedAt.slice(0, 10);
+    if (completedDate >= oldestDate && completedDate <= today) {
+      completedLast7++;
+    }
+  }
+
+  // Count tasks created in the last 7 days
+  let addedLast7 = 0;
+  for (const task of all) {
+    const createdDate = task.createdAt.slice(0, 10);
+    if (createdDate >= oldestDate && createdDate <= today) {
+      addedLast7++;
+    }
+  }
+
+  // How many days of data do we actually have? (at least 1 to avoid division by zero)
+  const daysWithData = Math.max(1, last7Dates.filter((d) => {
+    return all.some((t) => {
+      const created = t.createdAt.slice(0, 10);
+      const completed = t.completedAt?.slice(0, 10);
+      return created === d || completed === d || t.date === d;
+    });
+  }).length);
+
+  const avgCompletedPerDay = Math.round((completedLast7 / daysWithData) * 10) / 10;
+  const avgAddedPerDay = Math.round((addedLast7 / daysWithData) * 10) / 10;
+
+  // Drag-over: incomplete tasks from previous days (not today, not backlog-only)
+  const dragOverCount = all.filter((t) => {
+    if (t.completed) return false;
+    if (!t.date) return false; // backlog-only tasks without a focused date
+    return t.date < today;
+  }).length;
+
+  // Health indicator
+  let health: "green" | "amber" | "red";
+  if (addedLast7 === 0 && completedLast7 === 0) {
+    health = "amber"; // no activity
+  } else if (completedLast7 > addedLast7) {
+    health = "green"; // clearing faster than accumulating
+  } else if (completedLast7 >= addedLast7 * 0.8) {
+    health = "amber"; // roughly even (within 80%)
+  } else {
+    health = "red"; // backlog is growing
+  }
+
+  // Also factor in drag-over for health
+  if (health === "green" && dragOverCount > 3) {
+    health = "amber";
+  }
+  if (dragOverCount > 7) {
+    health = "red";
+  }
+
+  const slippingTasks = getSlippingTasks(3);
+
+  return {
+    completedToday,
+    totalToday,
+    avgCompletedPerDay,
+    avgAddedPerDay,
+    dragOverCount,
+    health,
+    slippingTasks,
+  };
+}
+
+export type MissCategory = "trade-off" | "forgot" | "energy" | "time" | "other";
+
 export interface DayLog {
   date: string; // YYYY-MM-DD
-  entries: Record<string, { status: LogStatus; value: number | null }>;
+  entries: Record<string, { status: LogStatus; value: number | null; missReason?: string; missCategory?: MissCategory }>;
   badEntries: Record<string, { occurred: boolean; durationMinutes: number | null }>;
   adminSummary?: {
     total: number;

@@ -3,6 +3,7 @@
 import { AuthProvider } from "@/components/AuthProvider";
 import { AuthGuard } from "@/components/AuthGuard";
 import { usePathname } from "next/navigation";
+import { useState, useEffect } from "react";
 
 // Routes that do NOT require authentication
 const PUBLIC_ROUTES = ["/login"];
@@ -16,15 +17,23 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
 }
 
 function AuthGatekeeper({ children }: { children: React.ReactNode }) {
-  // usePathname() works in client components (both web and Capacitor static builds)
-  let pathname: string;
+  const [clientPath, setClientPath] = useState<string | null>(null);
+
+  // Try Next.js usePathname first
+  let nextPathname: string | null = null;
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    pathname = usePathname();
+    nextPathname = usePathname();
   } catch {
-    // Fallback for edge cases (e.g. Capacitor WebView)
-    pathname = typeof window !== "undefined" ? window.location.pathname : "/";
+    // Will fall back to clientPath
   }
+
+  // Get window.location.pathname after mount (for Capacitor)
+  useEffect(() => {
+    setClientPath(window.location.pathname);
+  }, []);
+
+  const pathname = nextPathname ?? clientPath ?? "/";
 
   const isPublicRoute = PUBLIC_ROUTES.some((route) =>
     pathname.startsWith(route)

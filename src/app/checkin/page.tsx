@@ -1,14 +1,17 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { getHabitLevel, getRandomQuote, getContextualQuote, getFlameIcon, XP_VALUES, getQuoteOfTheDay } from "@/lib/habits";
 import { loadState, getToday, getLevelForXP, getSprintContext, recalculateStreaks, addDeferral, removeDeferral, getDeferredForStack, isDeferredAway, loadDeferred, loadAdminTasks, addAdminTask, toggleAdminTask, removeAdminTask, getAdminSummary } from "@/lib/store";
-import type { DayLog, DeferredHabit, AdminTask } from "@/lib/store";
+import type { DayLog, DeferredHabit, AdminTask, MissCategory } from "@/lib/store";
 import { getResolvedHabits, getResolvedHabitsByStack, getResolvedHabitsByChainOrder, type ResolvedHabit } from "@/lib/resolvedHabits";
 import { useDB } from "@/hooks/useDB";
 import { loadAdminTasksFromDB } from "@/lib/db";
 import { isHabitWeak } from "@/lib/weakness";
+import Link from "next/link";
 import { startEscalation, resolveEscalation, syncCompletionToServiceWorker } from "@/lib/notifications";
+import { isCapacitor } from "@/lib/capacitorUtils";
+import { scheduleNativeEscalation, cancelNativeEscalation, rescheduleAllNativeNotifications } from "@/lib/nativeNotifications";
 import { apiUrl } from "@/lib/api";
 import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
@@ -20,6 +23,8 @@ type CheckinEntry = {
   habitId: string;
   status: LogStatus | null;
   value: number | null;
+  missReason?: string;
+  missCategory?: MissCategory;
 };
 
 type BadHabitEntry = {
@@ -94,6 +99,25 @@ export default function CheckinPage() {
   const [lockSummary, setLockSummary] = useState<{ done: number; missed: number; later: number; cleanBad: number; slippedBad: number; measuredCount: number; totalXp: number; bareMinStreak: number }>({ done: 0, missed: 0, later: 0, cleanBad: 0, slippedBad: 0, measuredCount: 0, totalXp: 0, bareMinStreak: 0 });
   const [allStacksDone, setAllStacksDone] = useState(false);
   const [dayDismissed, setDayDismissed] = useState(false);
+
+  // Miss reason prompt state — tracks which habit is showing the "Why?" prompt
+  const [missReasonHabitId, setMissReasonHabitId] = useState<string | null>(null);
+  const missReasonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-collapse miss reason prompt after 5 seconds of no interaction
+  const startMissReasonTimer = useCallback((habitId: string) => {
+    if (missReasonTimerRef.current) clearTimeout(missReasonTimerRef.current);
+    missReasonTimerRef.current = setTimeout(() => {
+      setMissReasonHabitId((current) => current === habitId ? null : current);
+    }, 5000);
+  }, []);
+
+  const clearMissReasonTimer = useCallback(() => {
+    if (missReasonTimerRef.current) {
+      clearTimeout(missReasonTimerRef.current);
+      missReasonTimerRef.current = null;
+    }
+  }, []);
 
   // ─── Fast-path: synchronous lock check on mount ───
   // getSmartInitialStack() already picked the first unanswered stack.
@@ -311,6 +335,17 @@ export default function CheckinPage() {
       return next;
     });
 
+    // Show miss reason prompt when "missed" is selected
+    if (status === "missed") {
+      clearMissReasonTimer();
+      setMissReasonHabitId(habitId);
+      startMissReasonTimer(habitId);
+    } else if (missReasonHabitId === habitId) {
+      // User changed from miss to something else — hide the prompt
+      clearMissReasonTimer();
+      setMissReasonHabitId(null);
+    }
+
     // Escalation triggers
     const habit = getResolvedHabits(false, dbHabits, settings).find((h) => h.id === habitId);
     if (!habit) return;
@@ -318,14 +353,21 @@ export default function CheckinPage() {
     if (status === "later") {
       // No stacks to defer to (evening) or sprint singleCheckin — escalate immediately
       startEscalation(habitId, habit.name, habit.icon || "");
-      fetch(apiUrl("/api/notify/escalate"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
-      }).catch(() => {});
+      if (isCapacitor()) {
+        scheduleNativeEscalation(habitId, habit.name, habit.icon || "");
+      } else {
+        fetch(apiUrl("/api/notify/escalate"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
+        }).catch(() => {});
+      }
     } else {
       // Done or Missed — resolve any active escalation
       resolveEscalation(habitId);
+      if (isCapacitor()) {
+        cancelNativeEscalation(habitId);
+      }
     }
   }
 
@@ -343,11 +385,15 @@ export default function CheckinPage() {
     if (habit) {
       // Start Fibonacci escalation
       startEscalation(deferModalHabitId, habit.name, habit.icon || "");
-      fetch(apiUrl("/api/notify/escalate"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
-      }).catch(() => {});
+      if (isCapacitor()) {
+        scheduleNativeEscalation(deferModalHabitId, habit.name, habit.icon || "");
+      } else {
+        fetch(apiUrl("/api/notify/escalate"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ habitName: habit.name, habitIcon: habit.icon || "" }),
+        }).catch(() => {});
+      }
     }
     setDeferModalHabitId(null);
   }
@@ -363,6 +409,19 @@ export default function CheckinPage() {
       });
       return next;
     });
+  }
+
+  function setMissReason(habitId: string, category?: MissCategory, reason?: string) {
+    setEntries((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(habitId);
+      if (!existing) return prev;
+      next.set(habitId, { ...existing, missCategory: category, missReason: reason });
+      return next;
+    });
+    // Reset the auto-collapse timer on interaction
+    clearMissReasonTimer();
+    startMissReasonTimer(habitId);
   }
 
   function setBadEntry(habitId: string, occurred: boolean) {
@@ -402,7 +461,10 @@ export default function CheckinPage() {
     const entryRecord: DayLog["entries"] = {};
     entries.forEach((e, id) => {
       if (e.status != null) {
-        entryRecord[id] = { status: e.status, value: e.value };
+        const rec: DayLog["entries"][string] = { status: e.status, value: e.value };
+        if (e.missCategory) rec.missCategory = e.missCategory;
+        if (e.missReason) rec.missReason = e.missReason;
+        entryRecord[id] = rec;
       } else if (e.value != null) {
         entryRecord[id] = { status: "done", value: e.value };
       }
@@ -527,7 +589,10 @@ export default function CheckinPage() {
     // ─── 2. Save log entries FIRST ──────────────────────────
     const entryRecord: DayLog["entries"] = {};
     entries.forEach((e, id) => {
-      entryRecord[id] = { status: e.status ?? "later", value: e.value };
+      const rec: DayLog["entries"][string] = { status: e.status ?? "later", value: e.value };
+      if (e.missCategory) rec.missCategory = e.missCategory;
+      if (e.missReason) rec.missReason = e.missReason;
+      entryRecord[id] = rec;
     });
     const badRecord: DayLog["badEntries"] = {};
     badEntries.forEach((e, id) => {
@@ -600,13 +665,19 @@ export default function CheckinPage() {
     saveDayLog(finalDayLog, state);
 
     // Tell service worker which stacks are complete (suppresses future notifications)
-    syncCompletionToServiceWorker();
+    if (isCapacitor()) {
+      // Reschedule native notifications to reflect completed stacks
+      rescheduleAllNativeNotifications();
+    } else {
+      syncCompletionToServiceWorker();
+    }
 
     // Resolve all active escalations for submitted habits
     for (const habit of binaryHabits) {
       const entry = entries.get(habit.id);
       if (entry?.status === "done" || entry?.status === "missed") {
         resolveEscalation(habit.id);
+        if (isCapacitor()) cancelNativeEscalation(habit.id);
       }
     }
 
@@ -616,6 +687,7 @@ export default function CheckinPage() {
       if (entry?.status === "done" || entry?.status === "missed") {
         removeDeferral(habit.id);
         resolveEscalation(habit.id);
+        if (isCapacitor()) cancelNativeEscalation(habit.id);
       }
     }
 
@@ -734,12 +806,12 @@ export default function CheckinPage() {
                 </button>
               )}
               <div className="flex gap-2">
-                <a
+                <Link
                   href="/"
                   className="flex-1 rounded-xl bg-surface-800 hover:bg-surface-700 py-3 text-sm font-medium transition-colors text-center"
                 >
                   🏠 Dashboard
-                </a>
+                </Link>
                 <button
                   onClick={() => {
                     setPhase("checkin");
@@ -832,24 +904,24 @@ export default function CheckinPage() {
 
           {/* Actions */}
           <div className="w-full max-w-sm space-y-2">
-            <a
+            <Link
               href="/coach?mode=review"
               className="block w-full rounded-xl bg-brand text-white py-3 text-sm font-bold text-center transition-colors active:scale-[0.98]"
             >
               {"📊"} Weekly Review
-            </a>
-            <a
+            </Link>
+            <Link
               href="/edit-log"
               className="block w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm font-medium text-neutral-300 text-center hover:bg-surface-700 transition-colors"
             >
               {"📝"} Edit Today&apos;s Answers
-            </a>
-            <a
+            </Link>
+            <Link
               href="/"
               className="block w-full rounded-xl bg-surface-800 py-3 text-sm font-medium text-neutral-400 text-center hover:bg-surface-700 transition-colors"
             >
               {"🏠"} Dashboard
-            </a>
+            </Link>
             <button
               onClick={() => {
                 setDayDismissed(true);
@@ -920,12 +992,12 @@ export default function CheckinPage() {
 
         {/* Actions */}
         <div className="w-full max-w-sm space-y-2">
-          <a
+          <Link
             href="/edit-log"
             className="block w-full rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm font-medium text-neutral-300 text-center hover:bg-surface-700 transition-colors"
           >
             {"📝"} Edit Today&apos;s Answers
-          </a>
+          </Link>
 
           {nextStack && (
             <button
@@ -939,12 +1011,12 @@ export default function CheckinPage() {
             </button>
           )}
 
-          <a
+          <Link
             href="/"
             className="block w-full rounded-xl bg-surface-800 py-3 text-sm font-medium text-neutral-400 text-center hover:bg-surface-700 transition-colors"
           >
             {"🏠"} Dashboard
-          </a>
+          </Link>
 
           <button
             onClick={() => {
@@ -974,9 +1046,9 @@ export default function CheckinPage() {
           <h1 className="text-xl font-bold">
             {getGreeting("Michael")} {getGreetingEmoji()}
           </h1>
-          <a href="/" className="text-neutral-400 text-lg hover:text-neutral-200 transition-colors">
+          <Link href="/" className="text-neutral-400 text-lg hover:text-neutral-200 transition-colors">
             ↩
-          </a>
+          </Link>
         </div>
         <p className="text-sm text-neutral-400 italic">
           &ldquo;{getContextualQuote(activeStack === "morning" ? "morning" : "default").text}&rdquo;
@@ -996,9 +1068,9 @@ export default function CheckinPage() {
               <span className="text-xs font-bold text-white">SPRINT MODE</span>
               <span className="text-xs text-neutral-400">{intensityLabel}</span>
             </div>
-            <a href="/sprint" className="text-[10px] text-neutral-500 hover:text-neutral-300">
+            <Link href="/sprint" className="text-[10px] text-neutral-500 hover:text-neutral-300">
               View →
-            </a>
+            </Link>
           </div>
           <p className="text-[11px] text-neutral-400 mt-1">
             {sprint.intensity === "critical"
@@ -1041,6 +1113,12 @@ export default function CheckinPage() {
               needsAttention={isHabitWeak(habit.id)}
               onSelect={(status) => setEntry(habit.id, status)}
               sprintProtected={sprint.protectStreaks}
+              showMissReason={missReasonHabitId === habit.id}
+              onMissReason={(cat, reason) => setMissReason(habit.id, cat, reason)}
+              onMissReasonInteract={() => {
+                clearMissReasonTimer();
+                startMissReasonTimer(habit.id);
+              }}
             />
           ))}
         </section>
@@ -1093,6 +1171,12 @@ export default function CheckinPage() {
                   streakDays={streaks[habit.slug] ?? 0}
                   needsAttention={false}
                   onSelect={(status) => setEntry(habit.id, status)}
+                  showMissReason={missReasonHabitId === habit.id}
+                  onMissReason={(cat, reason) => setMissReason(habit.id, cat, reason)}
+                  onMissReasonInteract={() => {
+                    clearMissReasonTimer();
+                    startMissReasonTimer(habit.id);
+                  }}
                 />
               ))}
               {extraMeasuredHabits.map((habit) => (
@@ -1131,9 +1215,23 @@ export default function CheckinPage() {
                     next.set(habit.id, { habitId: habit.id, status, value: existing?.value ?? null });
                     return next;
                   });
+                  if (status === "missed") {
+                    clearMissReasonTimer();
+                    setMissReasonHabitId(habit.id);
+                    startMissReasonTimer(habit.id);
+                  } else if (missReasonHabitId === habit.id) {
+                    clearMissReasonTimer();
+                    setMissReasonHabitId(null);
+                  }
                   if (status === "done" || status === "missed") {
                     resolveEscalation(habit.id);
                   }
+                }}
+                showMissReason={missReasonHabitId === habit.id}
+                onMissReason={(cat, reason) => setMissReason(habit.id, cat, reason)}
+                onMissReasonInteract={() => {
+                  clearMissReasonTimer();
+                  startMissReasonTimer(habit.id);
                 }}
               />
             ))}
@@ -1156,9 +1254,9 @@ export default function CheckinPage() {
                 + Quick add
               </button>
             )}
-            <a href="/admin" className="text-[10px] text-blue-400 hover:text-blue-300 font-medium">
+            <Link href="/admin" className="text-[10px] text-blue-400 hover:text-blue-300 font-medium">
               Manage →
-            </a>
+            </Link>
           </div>
         </div>
         <div className="rounded-xl bg-surface-800 border border-blue-900/30 p-3 space-y-1.5">
@@ -1237,9 +1335,9 @@ export default function CheckinPage() {
           {adminTasks.length === 0 && !showAdminInput && (
             <div className="text-center py-3">
               <p className="text-xs text-neutral-600 mb-1">No tasks focused for today</p>
-              <a href="/admin" className="text-[10px] text-blue-400 hover:text-blue-300">
+              <Link href="/admin" className="text-[10px] text-blue-400 hover:text-blue-300">
                 Open Admin to focus from your backlog →
-              </a>
+              </Link>
             </div>
           )}
         </div>
@@ -1359,6 +1457,14 @@ export default function CheckinPage() {
   );
 }
 
+// ─── Miss Reason Categories ─────────────────────────────────
+const MISS_CATEGORIES: { value: MissCategory; label: string }[] = [
+  { value: "trade-off", label: "Trade-off" },
+  { value: "forgot", label: "Forgot" },
+  { value: "energy", label: "Low Energy" },
+  { value: "time", label: "No Time" },
+];
+
 // ─── Binary Habit Card ──────────────────────────────────────
 function BinaryHabitCard({
   habit,
@@ -1367,6 +1473,9 @@ function BinaryHabitCard({
   needsAttention,
   onSelect,
   sprintProtected,
+  showMissReason,
+  onMissReason,
+  onMissReasonInteract,
 }: {
   habit: Habit;
   entry: CheckinEntry | null;
@@ -1374,9 +1483,13 @@ function BinaryHabitCard({
   needsAttention?: boolean;
   onSelect: (status: LogStatus) => void;
   sprintProtected?: boolean;
+  showMissReason?: boolean;
+  onMissReason?: (category?: MissCategory, reason?: string) => void;
+  onMissReasonInteract?: () => void;
 }) {
   const level = getHabitLevel(habit.id, habit.current_level);
   const selected = entry?.status ?? null;
+  const [customReason, setCustomReason] = useState("");
 
   return (
     <div
@@ -1444,6 +1557,51 @@ function BinaryHabitCard({
           ⏰ Later
         </button>
       </div>
+
+      {/* Miss Reason Prompt — appears inline after tapping Miss */}
+      {showMissReason && selected === "missed" && onMissReason && (
+        <div className="mt-3 animate-in fade-in slide-in-from-top-1 duration-200">
+          <p className="text-[11px] text-neutral-500 mb-1.5">Why? <span className="text-neutral-600">(optional)</span></p>
+          <div className="flex flex-wrap gap-1.5 mb-1.5">
+            {MISS_CATEGORIES.map((cat) => (
+              <button
+                key={cat.value}
+                onClick={() => {
+                  onMissReasonInteract?.();
+                  onMissReason(cat.value, customReason || undefined);
+                }}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all active:scale-95 ${
+                  entry?.missCategory === cat.value
+                    ? "bg-missed/30 text-missed border border-missed/40"
+                    : "bg-surface-700 text-neutral-400 border border-surface-600 hover:border-missed/30 hover:text-neutral-300"
+                }`}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
+          <input
+            type="text"
+            value={customReason}
+            onChange={(e) => {
+              setCustomReason(e.target.value);
+              onMissReasonInteract?.();
+            }}
+            onBlur={() => {
+              if (customReason.trim()) {
+                onMissReason(entry?.missCategory ?? "other", customReason.trim());
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && customReason.trim()) {
+                onMissReason(entry?.missCategory ?? "other", customReason.trim());
+              }
+            }}
+            placeholder="Custom reason..."
+            className="w-full bg-surface-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white border border-surface-600 outline-none focus:ring-1 focus:ring-missed/40 placeholder:text-neutral-600"
+          />
+        </div>
+      )}
 
       {/* Bare Minimum Badge */}
       {habit.is_bare_minimum && (

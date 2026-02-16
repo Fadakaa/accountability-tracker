@@ -3,10 +3,12 @@
 import React from "react";
 import { useState, useEffect, useRef, useCallback, Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { useDB } from "@/hooks/useDB";
 import { useAuth } from "@/components/AuthProvider";
 import { buildCoachContext } from "@/lib/coach/context";
 import { COACH_SYSTEM_PROMPT, ANALYSIS_PROMPT_PREFIX, EXPERIMENT_SUGGEST_PROMPT } from "@/lib/coach/prompts";
+import { callProviderDirectly, hasLocalCoachKey } from "@/lib/coach/providers";
 import {
   loadExperiments,
   saveExperiment,
@@ -142,12 +144,12 @@ class CoachErrorBoundary extends React.Component<
             >
               Refresh
             </button>
-            <a
+            <Link
               href="/"
               className="rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-6 py-2.5 text-sm font-bold text-white"
             >
               Dashboard
-            </a>
+            </Link>
           </div>
         </div>
       );
@@ -167,6 +169,14 @@ export default function CoachPageWrapper() {
   );
 }
 
+// Detect if running in Capacitor (native app)
+function isCapacitorApp(): boolean {
+  if (typeof window === "undefined") return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = window as any;
+  return win.Capacitor !== undefined || win.capacitor !== undefined;
+}
+
 function CoachPage() {
   const searchParams = useSearchParams();
   const { state: dbState, settings, dbHabits, loading, saveState: dbSaveState } = useDB();
@@ -181,6 +191,11 @@ function CoachPage() {
 
   // Check if coach key is configured
   useEffect(() => {
+    // In Capacitor, check localStorage for the API key
+    if (isCapacitorApp()) {
+      setHasCoachKey(hasLocalCoachKey());
+      return;
+    }
     if (!user) { setHasCoachKey(false); return; }
     (async () => {
       try {
@@ -239,9 +254,9 @@ function CoachPage() {
       {/* Header */}
       <header className="px-5 pt-6 pb-3">
         <div className="flex items-center justify-between">
-          <a href="/" className="text-neutral-600 text-xs font-medium hover:text-neutral-400 transition-colors">
+          <Link href="/" className="text-neutral-600 text-xs font-medium hover:text-neutral-400 transition-colors">
             ← Back
-          </a>
+          </Link>
         </div>
         <div className="flex items-center gap-3 mt-3">
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand/30 to-brand/10 flex items-center justify-center border border-brand/20">
@@ -447,12 +462,12 @@ function ReviewMode({
           <p className="text-neutral-500 text-xs mb-6">Your reflection has been saved</p>
         )}
         <div className="flex gap-3">
-          <a href="/" className="rounded-xl bg-surface-800 hover:bg-surface-700 px-6 py-3 text-sm font-medium transition-colors">
+          <Link href="/" className="rounded-xl bg-surface-800 hover:bg-surface-700 px-6 py-3 text-sm font-medium transition-colors">
             Dashboard
-          </a>
-          <a href="/weekly" className="rounded-xl bg-brand hover:bg-brand-dark px-6 py-3 text-sm font-bold text-white transition-colors">
+          </Link>
+          <Link href="/weekly" className="rounded-xl bg-brand hover:bg-brand-dark px-6 py-3 text-sm font-bold text-white transition-colors">
             See Stats
-          </a>
+          </Link>
         </div>
       </div>
     );
@@ -1232,9 +1247,6 @@ function AnalysisTab({
     setError("");
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
       const gymSessions = loadGymSessions();
       const showingUp = loadShowingUpData();
       const experiments = await loadExperiments();
@@ -1258,26 +1270,44 @@ function AnalysisTab({
       const userMsg: ChatMessage = { role: "user", content: userMessage, timestamp: new Date().toISOString() };
       setMessages(prev => [...prev, userMsg]);
 
-      const res = await fetch("/api/coach/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          messages: allMessages,
-          provider: settings.coachSettings?.provider,
-          model: settings.coachSettings?.model,
-        }),
-      });
+      let content: string;
 
-      if (!res.ok) {
+      if (isCapacitorApp()) {
+        // In Capacitor: call AI provider directly using locally stored API key
+        const response = await callProviderDirectly(
+          allMessages,
+          settings.coachSettings?.provider as "anthropic" | "openai" | "google" | undefined,
+          settings.coachSettings?.model,
+        );
+        content = response.content;
+      } else {
+        // On web: use the Vercel API route (proxies the call, reads key from Supabase)
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Not authenticated");
+
+        const res = await fetch("/api/coach/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            messages: allMessages,
+            provider: settings.coachSettings?.provider,
+            model: settings.coachSettings?.model,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
         const data = await res.json();
-        throw new Error(data.error || `HTTP ${res.status}`);
+        content = data.content;
       }
 
-      const data = await res.json();
-      const assistantMsg: ChatMessage = { role: "assistant", content: data.content, timestamp: new Date().toISOString() };
+      const assistantMsg: ChatMessage = { role: "assistant", content, timestamp: new Date().toISOString() };
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -1307,12 +1337,12 @@ function AnalysisTab({
         <p className="text-xs text-neutral-500 mb-5 max-w-[260px] leading-relaxed">
           Add your API key in Settings to enable AI coaching analysis.
         </p>
-        <a
+        <Link
           href="/settings"
           className="rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-8 py-3 text-sm font-bold text-white hover:shadow-lg hover:shadow-brand/20 transition-all active:scale-[0.98]"
         >
           Go to Settings
-        </a>
+        </Link>
       </div>
     );
   }
@@ -1435,9 +1465,6 @@ function ExperimentsTab({
   async function handleSuggestExperiment() {
     setSuggesting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
       const gymSessions = loadGymSessions();
       const showingUp = loadShowingUpData();
       const context = buildCoachContext({
@@ -1449,29 +1476,47 @@ function ExperimentsTab({
         showingUp, experiments,
       });
 
-      const res = await fetch("/api/coach/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          messages: [
-            { role: "system", content: COACH_SYSTEM_PROMPT + "\n\n---\n\n" + context },
-            { role: "user", content: EXPERIMENT_SUGGEST_PROMPT },
-          ],
-          provider: settings.coachSettings?.provider,
-          model: settings.coachSettings?.model,
-        }),
-      });
+      const expMessages = [
+        { role: "system" as const, content: COACH_SYSTEM_PROMPT + "\n\n---\n\n" + context },
+        { role: "user" as const, content: EXPERIMENT_SUGGEST_PROMPT },
+      ];
 
-      if (!res.ok) {
+      let content: string;
+
+      if (isCapacitorApp()) {
+        // In Capacitor: call AI provider directly
+        const response = await callProviderDirectly(
+          expMessages,
+          settings.coachSettings?.provider as "anthropic" | "openai" | "google" | undefined,
+          settings.coachSettings?.model,
+        );
+        content = response.content;
+      } else {
+        // On web: use the Vercel API route
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Not authenticated");
+
+        const res = await fetch("/api/coach/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            messages: expMessages,
+            provider: settings.coachSettings?.provider,
+            model: settings.coachSettings?.model,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || "Failed");
+        }
+
         const data = await res.json();
-        throw new Error(data.error || "Failed");
+        content = data.content as string;
       }
-
-      const data = await res.json();
-      const content = data.content as string;
 
       const titleMatch = content.match(/\*\*\[(\w+)\]\s*Experiment:\s*(.+?)\*\*/);
       const durationMatch = content.match(/Duration:\s*(\d+)\s*day/i);

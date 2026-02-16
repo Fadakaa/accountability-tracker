@@ -22,6 +22,7 @@ import {
   loadSettings,
   saveSettings,
   recalculateStreaks,
+  DEFAULT_NOTIFICATION_SLOTS,
 } from "@/lib/store";
 import type { LocalState, UserSettings, DayLog } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -66,7 +67,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   habitOverrides: {},
   levelUpStates: {},
   checkinTimes: { morning: "07:00", midday: "13:00", evening: "21:00" },
-  notificationSlots: [],
+  notificationSlots: DEFAULT_NOTIFICATION_SLOTS,
   customQuotes: [],
   hiddenQuoteIds: [],
   routineChains: { morning: [], midday: [], evening: [] },
@@ -107,17 +108,101 @@ export function useDB(): UseDBResult {
   const [loading, setLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const loadedRef = useRef(false);
-  const prevUserIdRef = useRef<string | null>(null);
+  // Sentinel: "uninitialized" means we haven't seen any user yet (first load).
+  // This prevents clearAllLocalData() from firing when auth resolves
+  // from null → real user on normal app startup (which isn't a user switch).
+  const prevUserIdRef = useRef<string | null | "uninitialized">("uninitialized");
 
   // ─── Initial load ──────────────────────────────────────
 
   const loadData = useCallback(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const win = typeof window !== "undefined" ? (window as any) : null;
+    const isCapacitor = win?.Capacitor !== undefined || win?.capacitor !== undefined;
+
     setLoading(true);
+
+    // In Capacitor: load from localStorage first for instant display,
+    // then try to pull from Supabase in the background (if authenticated & online)
+    if (isCapacitor) {
+      const localState = loadState();
+      const localSettings = loadSettings();
+      setState(localState);
+      setSettings(localSettings);
+      setSyncStatus("offline");
+      setLoading(false);
+
+      // Background Supabase sync for Capacitor — pull remote data if local is empty
+      if (user && isOnline()) {
+        (async () => {
+          try {
+            const [remoteState, remoteSettings] = await Promise.all([
+              loadStateFromDB(),
+              loadSettingsFromDB(),
+            ]);
+            const localHasData = localState.logs.length > 0 || localState.totalXp > 0;
+            const remoteHasData = remoteState.logs.length > 0 || remoteState.totalXp > 0;
+
+            if (remoteHasData && !localHasData) {
+              // Remote has data but local is empty — pull from Supabase
+              console.log("[useDB] Capacitor: pulling data from Supabase (local was empty)");
+              setState(remoteState);
+              saveState(remoteState); // cache in localStorage
+              setSettings(remoteSettings);
+              saveSettings(remoteSettings);
+            } else if (remoteHasData && localHasData) {
+              // Both have data — use whichever has more logs (more complete)
+              if (remoteState.logs.length > localState.logs.length) {
+                console.log("[useDB] Capacitor: remote has more data, merging");
+                setState(remoteState);
+                saveState(remoteState);
+              }
+              // Always take remote settings if they exist
+              setSettings(remoteSettings);
+              saveSettings(remoteSettings);
+            }
+
+            // Load habits from DB
+            const habitsResult = await loadHabitsFromDB();
+            if (habitsResult) {
+              setDbHabits(habitsResult.habits);
+              setDbHabitLevels(habitsResult.levels);
+
+              // Recalculate streaks with real habits
+              const currentState = loadState(); // re-read after potential update
+              const { state: streakState, changed } = ensureStreaksConsistent(
+                currentState, habitsResult.habits, remoteSettings,
+              );
+              if (changed) {
+                setState(streakState);
+                saveState(streakState);
+              }
+            }
+
+            setSyncStatus("idle");
+          } catch (err) {
+            console.warn("[useDB] Capacitor background sync failed:", err);
+            // Not a problem — app works with localStorage data
+          }
+        })();
+      }
+      return;
+    }
+
     setSyncStatus(isOnline() && user ? "syncing" : "offline");
 
-    // Detect user switch — clear stale localStorage so new user starts fresh
+    // Detect user switch — clear stale localStorage so new user starts fresh.
+    // Only clear when BOTH the previous and current user IDs are real (non-null)
+    // values that differ. The "uninitialized" sentinel and null → user transitions
+    // (normal app startup) should never trigger a data wipe.
     const currentUserId = user?.id ?? null;
-    if (prevUserIdRef.current !== null && currentUserId !== prevUserIdRef.current) {
+    const prev = prevUserIdRef.current;
+    if (
+      prev !== "uninitialized" &&
+      prev !== null &&
+      currentUserId !== null &&
+      currentUserId !== prev
+    ) {
       console.log("[useDB] User changed — clearing stale localStorage data");
       clearAllLocalData();
       setState(DEFAULT_STATE);

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { getToday, getLevelForXP } from "@/lib/store";
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import { getToday, getLevelForXP, loadState as loadStateLocal } from "@/lib/store";
 import type { LocalState, SprintData, DayLog } from "@/lib/store";
 import type { SprintIntensity } from "@/types/database";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -13,53 +14,45 @@ type Phase = "activation" | "dashboard" | "summary";
 // ─── Component ──────────────────────────────────────────────
 export default function SprintPage() {
   const { state: dbState, settings, dbHabits, loading, saveState: dbSaveState, refresh } = useDB();
-  const [state, setState] = useState<LocalState | null>(null);
   const [phase, setPhase] = useState<Phase>("activation");
   const [completedSprint, setCompletedSprint] = useState<SprintData | null>(null);
+  const [dashboardSprint, setDashboardSprint] = useState<SprintData | null>(null);
 
-  // Sync from useDB on load
+  // On initial load: detect active sprint and set phase
   useEffect(() => {
     if (loading) return;
-    setState(dbState);
     if (dbState.activeSprint && dbState.activeSprint.status === "active") {
+      setDashboardSprint(dbState.activeSprint);
       setPhase("dashboard");
     }
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh state helper — re-read from useDB
-  const refreshState = useCallback(async () => {
-    await refresh();
-  }, [refresh]);
+  if (loading) return null;
 
-  // Keep local state in sync with dbState
-  useEffect(() => {
-    if (!loading) setState(dbState);
-  }, [dbState, loading]);
-
-  if (loading || !state) return null;
-
+  // ─── Summary Phase ───────────────────────────────────
   if (phase === "summary" && completedSprint) {
     return (
       <SprintSummary
         sprint={completedSprint}
-        state={state}
+        state={dbState}
         onNewSprint={() => {
           setCompletedSprint(null);
+          setDashboardSprint(null);
           setPhase("activation");
         }}
       />
     );
   }
 
-  if (phase === "dashboard" && state.activeSprint) {
+  // ─── Dashboard Phase ─────────────────────────────────
+  if (phase === "dashboard" && dashboardSprint) {
     return (
       <SprintDashboard
-        state={state}
-        sprint={state.activeSprint}
+        state={dbState}
+        sprint={dashboardSprint}
         dbSaveState={dbSaveState}
         dbHabits={dbHabits}
         settings={settings}
-        onRefresh={refreshState}
         onEndSprint={(archived) => {
           setCompletedSprint(archived);
           setPhase("summary");
@@ -68,12 +61,13 @@ export default function SprintPage() {
     );
   }
 
+  // ─── Activation Phase ────────────────────────────────
   return (
     <SprintActivation
-      state={state}
+      state={dbState}
       dbSaveState={dbSaveState}
-      onActivated={async () => {
-        await refreshState();
+      onActivated={(sprint) => {
+        setDashboardSprint(sprint);
         setPhase("dashboard");
       }}
     />
@@ -84,7 +78,7 @@ export default function SprintPage() {
 function SprintActivation({ state, dbSaveState, onActivated }: {
   state: LocalState;
   dbSaveState: (s: LocalState) => Promise<void>;
-  onActivated: () => void;
+  onActivated: (sprint: SprintData) => void;
 }) {
   const [name, setName] = useState("");
   const [deadline, setDeadline] = useState("");
@@ -111,7 +105,7 @@ function SprintActivation({ state, dbSaveState, onActivated }: {
 
     const updated = { ...state, activeSprint: sprint };
     await dbSaveState(updated);
-    onActivated();
+    onActivated(sprint);
   }
 
   const intensityOptions: { value: SprintIntensity; icon: string; label: string; desc: string }[] = [
@@ -140,9 +134,9 @@ function SprintActivation({ state, dbSaveState, onActivated }: {
       <header className="mb-6">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold">🚀 Activate Sprint Mode</h1>
-          <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
+          <Link href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
             ← Back
-          </a>
+          </Link>
         </div>
         <p className="text-sm text-neutral-400 mt-1">
           Focus on a deadline. The system scales back to protect your bare minimum.
@@ -257,7 +251,6 @@ function SprintDashboard({
   dbSaveState,
   dbHabits,
   settings,
-  onRefresh,
   onEndSprint,
 }: {
   state: LocalState;
@@ -265,7 +258,6 @@ function SprintDashboard({
   dbSaveState: (s: LocalState) => Promise<void>;
   dbHabits: import("@/types/database").Habit[] | null;
   settings: import("@/lib/store").UserSettings;
-  onRefresh: () => void;
   onEndSprint: (archived: SprintData) => void;
 }) {
   const [tasks, setTasks] = useState(sprint.tasks);
@@ -348,13 +340,14 @@ function SprintDashboard({
   }
 
   async function persistTasks(updatedTasks: SprintData["tasks"]) {
-    if (state.activeSprint) {
+    // Read latest state from localStorage to avoid stale closure issues
+    const freshState = loadStateLocal();
+    if (freshState.activeSprint) {
       const updated = {
-        ...state,
-        activeSprint: { ...state.activeSprint, tasks: updatedTasks },
+        ...freshState,
+        activeSprint: { ...freshState.activeSprint, tasks: updatedTasks },
       };
       await dbSaveState(updated);
-      onRefresh();
     }
   }
 
@@ -366,15 +359,24 @@ function SprintDashboard({
       completedAt: new Date().toISOString(),
     };
 
+    // Read fresh state from localStorage to avoid stale closure
+    const freshState = loadStateLocal();
     const updated = {
-      ...state,
-      sprintHistory: [...(state.sprintHistory ?? []), archived],
+      ...freshState,
+      sprintHistory: [...(freshState.sprintHistory ?? []), archived],
       activeSprint: null,
     };
-    await dbSaveState(updated);
 
+    // Transition to summary FIRST — parent uses phase, not state.activeSprint
     setShowConfirm(false);
     onEndSprint(archived);
+
+    // Persist in background — already transitioned so no race
+    try {
+      await dbSaveState(updated);
+    } catch (err) {
+      console.warn("[sprint] Save failed during end:", err);
+    }
   }
 
   return (
@@ -386,9 +388,9 @@ function SprintDashboard({
             <span className="text-lg">🚀</span>
             <h1 className="text-lg font-bold">SPRINT MODE</h1>
           </div>
-          <a href="/" className="text-neutral-500 text-xs hover:text-neutral-300">
+          <Link href="/" className="text-neutral-500 text-xs hover:text-neutral-300">
             Dashboard
-          </a>
+          </Link>
         </div>
         <div className="text-sm font-semibold text-brand">{sprint.name}</div>
         <div className="flex items-center gap-3 mt-1 text-xs text-neutral-400">
@@ -555,12 +557,12 @@ function SprintDashboard({
 
       {/* Actions */}
       <div className="mt-auto flex gap-3 pb-4">
-        <a
+        <Link
           href="/checkin"
           className="flex-1 rounded-xl bg-brand hover:bg-brand-dark text-white text-sm font-bold py-3 text-center transition-colors"
         >
           📝 Check-in
-        </a>
+        </Link>
         <button
           onClick={() => setShowConfirm(true)}
           className="rounded-xl bg-surface-700 hover:bg-surface-600 text-neutral-300 text-sm font-medium px-4 py-3 transition-colors"
@@ -698,12 +700,12 @@ function SprintSummary({
         >
           🚀 Start New Sprint
         </button>
-        <a
+        <Link
           href="/"
           className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 transition-colors"
         >
           🏠 Dashboard
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -756,13 +758,13 @@ function TaskItem({
 
   return (
     <div>
-      <div className="flex items-center gap-2 py-1.5 group">
+      <div className="flex items-center gap-2 py-1.5">
         <button
           onClick={() => onToggle(task.id)}
-          className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
+          className={`w-6 h-6 rounded border-2 flex items-center justify-center shrink-0 ${
             task.completed
               ? "bg-done border-done text-white"
-              : "border-neutral-600 hover:border-neutral-400"
+              : "border-neutral-600 hover:border-neutral-400 active:border-neutral-300"
           }`}
         >
           {task.completed && (
@@ -774,18 +776,16 @@ function TaskItem({
         <span className={`text-sm flex-1 ${task.completed ? "line-through text-neutral-600" : "text-neutral-200"}`}>
           {task.title}
         </span>
-        <div className="hidden group-hover:flex items-center gap-1">
+        <div className="flex items-center gap-0">
           <button
             onClick={() => setShowSubInput(!showSubInput)}
-            className="text-[10px] text-neutral-600 hover:text-neutral-400"
-            title="Add sub-task"
+            className="text-[11px] text-neutral-500 hover:text-neutral-300 active:text-neutral-200 px-2 py-1.5 -my-1"
           >
             +sub
           </button>
           <button
             onClick={() => onRemove(task.id)}
-            className="text-[10px] text-neutral-600 hover:text-red-400"
-            title="Remove"
+            className="text-sm text-neutral-600 hover:text-red-400 active:text-red-400 px-2 py-1.5 -my-1"
           >
             ✕
           </button>
@@ -796,13 +796,13 @@ function TaskItem({
       {subTasks.length > 0 && (
         <div className="ml-7 space-y-0.5">
           {subTasks.map((sub) => (
-            <div key={sub.id} className="flex items-center gap-2 py-1 group">
+            <div key={sub.id} className="flex items-center gap-2 py-1">
               <button
                 onClick={() => onToggle(sub.id)}
-                className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
+                className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 ${
                   sub.completed
                     ? "bg-done border-done text-white"
-                    : "border-neutral-700 hover:border-neutral-500"
+                    : "border-neutral-700 hover:border-neutral-500 active:border-neutral-400"
                 }`}
               >
                 {sub.completed && (
@@ -816,7 +816,7 @@ function TaskItem({
               </span>
               <button
                 onClick={() => onRemove(sub.id)}
-                className="hidden group-hover:block text-[10px] text-neutral-700 hover:text-red-400"
+                className="text-sm text-neutral-600 hover:text-red-400 active:text-red-400 px-2 py-1.5 -my-1"
               >
                 ✕
               </button>

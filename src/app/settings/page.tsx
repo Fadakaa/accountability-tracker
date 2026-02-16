@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadSettings as loadSettingsLocal, loadState as loadStateLocal, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks, getLevelForXP } from "@/lib/store";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { loadSettings as loadSettingsLocal, loadState as loadStateLocal, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks, getLevelForXP, clearAllLocalData } from "@/lib/store";
 import type { UserSettings, HabitOverride, LocalState, NotificationSlot } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
@@ -11,6 +13,9 @@ import type { Habit, HabitStack, HabitCategory } from "@/types/database";
 import { isBinaryLike } from "@/types/database";
 import { syncScheduleToServiceWorker } from "@/lib/notifications";
 import { apiUrl } from "@/lib/api";
+import { saveCoachKeyLocally, loadCoachKeyLocally, callProviderDirectly } from "@/lib/coach/providers";
+import { isCapacitor } from "@/lib/capacitorUtils";
+import { sendNativeTestNotification, rescheduleAllNativeNotifications, checkNativeNotificationPermission, requestNativeNotificationPermission } from "@/lib/nativeNotifications";
 import { useAuth } from "@/components/AuthProvider";
 import { createHabit, updateCustomHabit, deleteCustomHabit, isDefaultHabit, type CreateHabitInput } from "@/lib/habitCrud";
 import { useDB } from "@/hooks/useDB";
@@ -25,6 +30,7 @@ const STACKS: { key: HabitStack; label: string; icon: string }[] = [
 ];
 
 export default function SettingsPage() {
+  const router = useRouter();
   const { user, signOut } = useAuth();
   const { state, settings, dbHabits, loading, saveState: dbSaveState, saveSettings: dbSaveSettings } = useDB();
   const [localSettings, setLocalSettings] = useState<UserSettings | null>(null);
@@ -116,38 +122,14 @@ export default function SettingsPage() {
     <div className="flex flex-col min-h-screen px-4 py-6">
       {/* Header */}
       <header className="mb-6">
-        <a href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
+        <Link href="/" className="text-neutral-500 text-sm hover:text-neutral-300">
           ← Dashboard
-        </a>
+        </Link>
         <h1 className="text-xl font-bold mt-1">⚙️ Settings</h1>
       </header>
 
       {/* Account */}
-      <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
-        <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
-          Account
-        </h2>
-        <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm text-neutral-300 truncate">
-              {user?.email ?? "Not signed in"}
-            </p>
-            <p className="text-[10px] text-neutral-600 mt-0.5">
-              Signed in via email
-            </p>
-          </div>
-          <button
-            onClick={async () => {
-              await signOut();
-              window.location.href = "/login";
-            }}
-            className="ml-4 rounded-lg bg-surface-700 hover:bg-surface-600 px-4 py-2 text-xs
-                       text-neutral-400 hover:text-white transition-colors flex-shrink-0"
-          >
-            Sign Out
-          </button>
-        </div>
-      </section>
+      <AccountSection signOut={signOut} router={router} userEmail={user?.email} />
 
       {/* Data Sync */}
       <DataSyncSection />
@@ -271,12 +253,12 @@ export default function SettingsPage() {
 
       {/* Back */}
       <div className="mt-auto pt-4 pb-4">
-        <a
+        <Link
           href="/"
           className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium bg-surface-800 hover:bg-surface-700 transition-colors"
         >
           🏠 Dashboard
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -781,6 +763,7 @@ function HabitSettingsRow({
   const [expanded, setExpanded] = useState(false);
   const [editName, setEditName] = useState(habit.name);
   const [editIcon, setEditIcon] = useState(habit.icon || "");
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const level = getHabitLevel(habit.id, habit.current_level);
   const isCustom = !isDefaultHabit(habit.id);
 
@@ -928,12 +911,29 @@ function HabitSettingsRow({
           </div>
 
           {/* Archive */}
-          <button
-            onClick={onArchive}
-            className="w-full rounded-lg border border-missed/30 py-2 text-xs text-missed hover:bg-missed/10 transition-colors"
-          >
-            Archive Habit
-          </button>
+          {confirmArchive ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmArchive(false)}
+                className="flex-1 rounded-lg border border-surface-600 py-2 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={onArchive}
+                className="flex-1 rounded-lg bg-missed/20 border border-missed/30 py-2 text-xs text-missed font-bold hover:bg-missed/30 transition-colors"
+              >
+                Confirm Archive
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmArchive(true)}
+              className="w-full rounded-lg border border-missed/30 py-2 text-xs text-missed hover:bg-missed/10 transition-colors"
+            >
+              Archive Habit
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1111,6 +1111,97 @@ function QuotesSection({ settings, onUpdate }: { settings: UserSettings; onUpdat
   );
 }
 
+// Detect Capacitor
+function isCapacitorApp(): boolean {
+  if (typeof window === "undefined") return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = window as any;
+  return win.Capacitor !== undefined || win.capacitor !== undefined;
+}
+
+// ─── Account Section ─────────────────────────────────────────
+function AccountSection({ signOut, router, userEmail }: {
+  signOut: () => Promise<void>;
+  router: { push: (url: string) => void };
+  userEmail?: string | null;
+}) {
+  const { isSoloMode } = useAuth();
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  return (
+    <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+      <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+        Account
+      </h2>
+      <div className="flex items-center justify-between">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-neutral-300 truncate">
+            {isSoloMode ? "Solo Mode" : (userEmail ?? "Not signed in")}
+          </p>
+          <p className="text-[10px] text-neutral-600 mt-0.5">
+            {isSoloMode ? "Not signed in — data stored locally" : "Signed in via email"}
+          </p>
+        </div>
+        <div className="flex gap-2 ml-4 flex-shrink-0">
+          {isSoloMode ? (
+            // Solo mode: show Sign In button + Clear Data
+            <>
+              <button
+                onClick={() => router.push("/login")}
+                className="rounded-lg bg-brand hover:bg-brand-dark px-4 py-2 text-xs
+                           text-white font-bold transition-colors"
+              >
+                Sign In
+              </button>
+              {confirmClear ? (
+                <>
+                  <button
+                    onClick={() => {
+                      clearAllLocalData();
+                      window.location.reload();
+                    }}
+                    className="rounded-lg bg-red-600 hover:bg-red-500 px-3 py-2 text-xs text-white font-bold transition-colors"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setConfirmClear(false)}
+                    className="rounded-lg bg-surface-700 hover:bg-surface-600 px-3 py-2 text-xs text-neutral-400 transition-colors"
+                  >
+                    ✕
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setConfirmClear(true)}
+                  className="rounded-lg bg-surface-700 hover:bg-surface-600 px-4 py-2 text-xs
+                             text-neutral-400 hover:text-white transition-colors"
+                >
+                  Clear Data
+                </button>
+              )}
+            </>
+          ) : (
+            // Signed in: show Sign Out button
+            <button
+              onClick={async () => {
+                await signOut();
+                if (!isCapacitorApp()) {
+                  router.push("/login");
+                }
+              }}
+              className="rounded-lg bg-surface-700 hover:bg-surface-600 px-4 py-2 text-xs
+                         text-neutral-400 hover:text-white transition-colors"
+            >
+              Sign Out
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─── AI Coach Settings ──────────────────────────────────────
 function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpdate: (s: UserSettings) => void }) {
   const { user } = useAuth();
@@ -1127,6 +1218,16 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
 
   // Check if an API key already exists
   useEffect(() => {
+    // In Capacitor: check localStorage for the API key
+    if (isCapacitorApp()) {
+      const localConfig = loadCoachKeyLocally();
+      if (localConfig) {
+        setHasExistingKey(true);
+        if (localConfig.provider && !provider) setProvider(localConfig.provider);
+        if (localConfig.model && !model) setModel(localConfig.model);
+      }
+      return;
+    }
     if (!user) return;
     (async () => {
       try {
@@ -1162,26 +1263,37 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
   };
 
   async function handleSaveKey() {
-    if (!user || !provider || !apiKey.trim()) return;
+    if (!provider || !apiKey.trim()) return;
     setSaveStatus("saving");
     setSaveError("");
 
     try {
-      const { supabase } = await import("@/lib/supabase");
       const selectedModel = model || MODELS[provider]?.[0]?.value || "";
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase as any).from("coach_api_keys").upsert({
-        user_id: user.id,
-        provider,
-        api_key_encrypted: apiKey.trim(),
-        model: selectedModel,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "user_id" });
+      if (isCapacitorApp()) {
+        // In Capacitor: save API key to localStorage (no Supabase)
+        saveCoachKeyLocally({
+          provider: provider as "anthropic" | "openai" | "google",
+          apiKey: apiKey.trim(),
+          model: selectedModel,
+        });
+      } else {
+        // On web: save to Supabase
+        if (!user) throw new Error("Not signed in");
+        const { supabase } = await import("@/lib/supabase");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error } = await (supabase as any).from("coach_api_keys").upsert({
+          user_id: user.id,
+          provider,
+          api_key_encrypted: apiKey.trim(),
+          model: selectedModel,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "user_id" });
 
-      if (error) throw error;
+        if (error) throw error;
+      }
 
-      // Also save provider preference in settings
+      // Save provider preference in settings
       const newSettings = {
         ...settings,
         coachSettings: { provider: provider as "anthropic" | "openai" | "google", model: selectedModel },
@@ -1202,34 +1314,47 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
   }
 
   async function handleTestConnection() {
-    if (!user) return;
     setTestStatus("testing");
     setTestError("");
 
     try {
-      const { supabase } = await import("@/lib/supabase");
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      const res = await fetch("/api/coach/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          messages: [
+      if (isCapacitorApp()) {
+        // In Capacitor: test by calling the provider directly
+        await callProviderDirectly(
+          [
             { role: "system", content: "Respond with exactly: CONNECTION_OK" },
             { role: "user", content: "Test connection" },
           ],
-          provider: settings.coachSettings?.provider || provider,
-          model: settings.coachSettings?.model || model,
-        }),
-      });
+          (settings.coachSettings?.provider || provider) as "anthropic" | "openai" | "google" | undefined,
+          settings.coachSettings?.model || model,
+        );
+      } else {
+        // On web: test via the Vercel API route
+        if (!user) throw new Error("Not signed in");
+        const { supabase } = await import("@/lib/supabase");
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Not authenticated");
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || `HTTP ${res.status}`);
+        const res = await fetch("/api/coach/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: "Respond with exactly: CONNECTION_OK" },
+              { role: "user", content: "Test connection" },
+            ],
+            provider: settings.coachSettings?.provider || provider,
+            model: settings.coachSettings?.model || model,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
       }
 
       setTestStatus("success");
@@ -1309,7 +1434,7 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
               className="mt-1 w-full rounded-lg bg-surface-700 border border-surface-600 px-3 py-2 text-sm text-neutral-300 outline-none focus:border-brand placeholder:text-neutral-600"
             />
             <p className="text-[10px] text-neutral-600 mt-1">
-              Stored securely in Supabase. Never visible in the browser.
+              {isCapacitorApp() ? "Stored locally on your device." : "Stored securely in Supabase. Never visible in the browser."}
             </p>
           </div>
         )}
@@ -1364,6 +1489,116 @@ function AICoachSection({ settings, onUpdate }: { settings: UserSettings; onUpda
 
 // ─── Notification Settings ──────────────────────────────────
 function NotificationSection() {
+  if (isCapacitorApp()) {
+    return <NativeNotificationSection />;
+  }
+  return <NtfyNotificationSection />;
+}
+
+// Native iOS notification settings (Capacitor)
+function NativeNotificationSection() {
+  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    checkNativeNotificationPermission().then(setPermissionGranted);
+  }, []);
+
+  async function handleRequestPermission() {
+    const granted = await requestNativeNotificationPermission();
+    setPermissionGranted(granted);
+    if (granted) {
+      await rescheduleAllNativeNotifications();
+    }
+  }
+
+  async function handleTestNotification() {
+    setTestStatus("sending");
+    try {
+      await sendNativeTestNotification();
+      setTestStatus("sent");
+      setTimeout(() => setTestStatus("idle"), 4000);
+    } catch {
+      setTestStatus("error");
+      setTimeout(() => setTestStatus("idle"), 4000);
+    }
+  }
+
+  return (
+    <section className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-6">
+      <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">
+        Notifications
+      </h2>
+
+      <div className="space-y-4">
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          Native notifications to your lock screen — daily check-in reminders and Fibonacci escalation when you tap &quot;Later&quot;.
+        </p>
+
+        {/* Permission status */}
+        <div className="flex items-center justify-between rounded-lg bg-surface-700/50 p-3">
+          <div>
+            <p className="text-xs font-medium text-neutral-300">Notification Permission</p>
+            <p className="text-[10px] text-neutral-500">
+              {permissionGranted === null ? "Checking..." : permissionGranted ? "Enabled" : "Not enabled"}
+            </p>
+          </div>
+          {permissionGranted === false && (
+            <button
+              onClick={handleRequestPermission}
+              className="rounded-lg bg-brand hover:bg-brand-dark px-4 py-2 text-xs text-white font-bold transition-colors"
+            >
+              Enable
+            </button>
+          )}
+          {permissionGranted === true && (
+            <span className="text-done text-xs font-bold">✓ Active</span>
+          )}
+        </div>
+
+        {/* Editable Schedule */}
+        <NotificationScheduleEditor />
+
+        {/* Fibonacci Escalation Info */}
+        <div className="rounded-lg bg-surface-700/50 p-3">
+          <h3 className="text-xs font-bold text-neutral-300 mb-2">Fibonacci Escalation:</h3>
+          <p className="text-xs text-neutral-400 leading-relaxed">
+            When you tap <span className="text-later font-semibold">Later</span> on a habit, escalating reminders hit your phone:
+          </p>
+          <div className="mt-2 text-[10px] text-neutral-500 font-mono">
+            +13 min → +8 min → +5 min → +3 min → +1 min
+          </div>
+        </div>
+
+        {/* Test button */}
+        <button
+          onClick={handleTestNotification}
+          disabled={testStatus === "sending"}
+          className={`w-full rounded-lg py-2.5 text-sm font-medium transition-all active:scale-[0.98] ${
+            testStatus === "sent"
+              ? "bg-done/20 text-done border border-done/30"
+              : testStatus === "error"
+                ? "bg-missed/20 text-missed border border-missed/30"
+                : testStatus === "sending"
+                  ? "bg-surface-700 text-neutral-500"
+                  : "bg-brand hover:bg-brand-dark text-white font-bold"
+          }`}
+        >
+          {testStatus === "sending"
+            ? "Scheduling..."
+            : testStatus === "sent"
+              ? "✓ Notification sent!"
+              : testStatus === "error"
+                ? "✕ Failed"
+                : "📱 Send Test Notification"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// Original ntfy.sh notification settings (web)
+function NtfyNotificationSection() {
   const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -1497,8 +1732,12 @@ function NotificationScheduleEditor() {
     currentSettings.checkinTimes = syncCheckinTimesFromSlots(next);
     // Save to localStorage + Supabase
     saveSettingsToDB(currentSettings);
-    // Push updated schedule to service worker immediately
-    syncScheduleToServiceWorker();
+    // Push updated schedule to native or service worker
+    if (isCapacitor()) {
+      rescheduleAllNativeNotifications().catch(console.warn);
+    } else {
+      syncScheduleToServiceWorker();
+    }
   }
 
   function updateSlot(id: string, updates: Partial<NotificationSlot>) {
@@ -1539,19 +1778,30 @@ function NotificationScheduleEditor() {
   }
 
   async function syncSchedule() {
-    // Call the sync API to update the server-side schedule
-    try {
-      const res = await fetch(apiUrl("/api/notify/sync-schedule"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slots: slots.filter((s) => s.enabled) }),
-      });
-      if (res.ok) {
+    if (isCapacitor()) {
+      // Native: reschedule all local notifications from current settings
+      try {
+        await rescheduleAllNativeNotifications();
         setSynced(true);
         setTimeout(() => setSynced(false), 3000);
+      } catch (err) {
+        console.warn("[syncSchedule] Native reschedule failed:", err);
       }
-    } catch {
-      // Silent fail — schedule will use defaults on next cron
+    } else {
+      // Web: call the sync API to update the server-side schedule
+      try {
+        const res = await fetch(apiUrl("/api/notify/sync-schedule"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slots: slots.filter((s) => s.enabled) }),
+        });
+        if (res.ok) {
+          setSynced(true);
+          setTimeout(() => setSynced(false), 3000);
+        }
+      } catch {
+        // Silent fail — schedule will use defaults on next cron
+      }
     }
   }
 

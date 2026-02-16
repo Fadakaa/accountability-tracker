@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 
 export default function LoginPage() {
-  const { user, loading, signIn, signUp } = useAuth();
+  const router = useRouter();
+  const { user, loading, signIn, signUp, isSoloMode } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -13,12 +15,12 @@ export default function LoginPage() {
   const [signupSuccess, setSignupSuccess] = useState(false);
   const [honestyAgreed, setHonestyAgreed] = useState(false);
 
-  // Redirect if already logged in
+  // Redirect if already logged in (but NOT if in solo mode — they came here to sign in)
   useEffect(() => {
-    if (!loading && user) {
-      window.location.href = "/";
+    if (!loading && user && !isSoloMode) {
+      router.push("/");
     }
-  }, [user, loading]);
+  }, [user, loading, isSoloMode]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -57,8 +59,8 @@ export default function LoginPage() {
     );
   }
 
-  // Already logged in — will redirect
-  if (user) return null;
+  // Already logged in (with real account) — will redirect
+  if (user && !isSoloMode) return null;
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6">

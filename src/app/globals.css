@@ -38,6 +38,16 @@ body {
   -webkit-touch-callout: none;
 }
 
+/* Eliminate 300ms tap delay on all interactive elements */
+button,
+a,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
+}
+
 body {
   background-color: var(--color-surface-900);
   color: #f5f5f5;

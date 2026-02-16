@@ -5,16 +5,18 @@ const config: CapacitorConfig = {
   appName: "Accountability",
   webDir: "out", // Next.js static export directory
   server: {
-    // In development, use the local dev server
-    // In production, the app loads from the bundled static files
+    // Use https on both platforms — enables proper file resolution for static exports
     androidScheme: "https",
+    iosScheme: "https",
   },
   ios: {
     contentInset: "automatic",
-    scheme: "Accountability",
   },
   plugins: {
-    // Capacitor plugin configuration goes here
+    LocalNotifications: {
+      iconColor: "#f97316",
+      sound: "default",
+    },
   },
 };
 

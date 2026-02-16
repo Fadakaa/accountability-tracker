@@ -1,19 +1,42 @@
 "use client";
 
 import { useAuth } from "@/components/AuthProvider";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const { user, loading } = useAuth();
+  const [isCapacitor, setIsCapacitor] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
+  // Detect Capacitor after mount to avoid hydration mismatch
   useEffect(() => {
-    if (!loading && !user) {
-      // Client-side redirect — works in both web and Capacitor
-      window.location.href = "/login";
-    }
-  }, [user, loading]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const win = window as any;
+    setIsCapacitor(win.Capacitor !== undefined || win.capacitor !== undefined);
+    setMounted(true);
+  }, []);
 
-  // Show loading spinner while checking auth
+  // Handle redirect for web (non-Capacitor) when not authenticated
+  useEffect(() => {
+    if (!mounted || isCapacitor) return;
+    if (!loading && !user) {
+      router.push("/login");
+    }
+  }, [user, loading, mounted, isCapacitor]);
+
+  // Before first client render, render nothing (avoids hydration mismatch)
+  if (!mounted) {
+    return null;
+  }
+
+  // In Capacitor, always render children — no auth gate needed
+  if (isCapacitor) {
+    return <>{children}</>;
+  }
+
+  // Web: show spinner while checking auth
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">

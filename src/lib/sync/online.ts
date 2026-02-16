@@ -35,10 +35,13 @@ export async function canReachSupabase(): Promise<boolean> {
   try {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     if (!url) return false;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${url}/rest/v1/`, {
       method: "HEAD",
-      signal: AbortSignal.timeout(5000),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     return res.ok || res.status === 401; // 401 = reachable but needs auth
   } catch {
     return false;
