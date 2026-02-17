@@ -380,6 +380,7 @@ export function useDB(): UseDBResult {
 
   const handleSaveDayLog = useCallback(async (dayLog: DayLog, fullState: LocalState) => {
     setState(fullState);
+    saveState(fullState); // localStorage immediately — ensures data survives page navigation
     try {
       await saveDayLogToDB(dayLog, fullState);
     } catch (err) {

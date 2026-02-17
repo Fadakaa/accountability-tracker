@@ -4,7 +4,7 @@
 // localStorage DayLog: { date, entries: Record<habitId, {status, value}>, badEntries: Record<habitId, {occurred, durationMinutes}>, xpEarned, ... }
 // Supabase: one daily_logs row per habit per day + one bad_habit_logs row per bad habit per day + one daily_log_summaries row per day
 
-import type { DayLog, SprintData, WrapReflection, LocalState, GymSessionLocal, GymRoutine, AdminTask, ShowingUpData } from "@/lib/store";
+import type { DayLog, SprintData, WrapReflection, LocalState, GymSessionLocal, GymRoutine, AdminTask, ShowingUpData, MissCategory } from "@/lib/store";
 import type { LogStatus, SprintIntensity } from "@/types/database";
 import type {
   SupabaseDailyLogRow,
@@ -91,8 +91,10 @@ export function rowsToDayLogs(
   summaries: SupabaseLogSummaryRow[]
 ): DayLog[] {
   // Group by date
+  // Entry type includes optional miss reason fields (deserialized from notes JSON)
+  type EntryValue = { status: LogStatus; value: number | null; missCategory?: MissCategory; missReason?: string };
   const byDate = new Map<string, {
-    entries: Record<string, { status: LogStatus; value: number | null }>;
+    entries: Record<string, EntryValue>;
     badEntries: Record<string, { occurred: boolean; durationMinutes: number | null }>;
   }>();
 
@@ -100,10 +102,23 @@ export function rowsToDayLogs(
     if (!byDate.has(row.log_date)) {
       byDate.set(row.log_date, { entries: {}, badEntries: {} });
     }
-    byDate.get(row.log_date)!.entries[row.habit_id] = {
+    // Deserialize missCategory/missReason from notes JSON (written by dayLogToRows)
+    let missCategory: MissCategory | undefined;
+    let missReason: string | undefined;
+    if (row.notes) {
+      try {
+        const parsed = JSON.parse(row.notes);
+        if (parsed.missCategory) missCategory = parsed.missCategory as MissCategory;
+        if (parsed.missReason) missReason = parsed.missReason;
+      } catch { /* not JSON, ignore */ }
+    }
+    const entry: EntryValue = {
       status: row.status as LogStatus,
       value: row.value,
     };
+    if (missCategory) entry.missCategory = missCategory;
+    if (missReason) entry.missReason = missReason;
+    byDate.get(row.log_date)!.entries[row.habit_id] = entry;
   }
 
   for (const row of badHabitLogs) {

@@ -179,7 +179,44 @@ export async function loadStateFromDB(): Promise<LocalState> {
         state.sprintHistory = localState.sprintHistory ?? [];
       }
 
-      // Supabase has real data — cache it locally
+      // ─── Log merge: localStorage may have entries that haven't synced to Supabase yet ───
+      // For example, a morning check-in was just saved to localStorage but the async Supabase
+      // write hasn't landed. We must merge logs per-date, keeping whichever has more entries.
+      if (localHasData) {
+        const logsByDate = new Map<string, typeof state.logs[0]>();
+        // Start with Supabase logs
+        for (const log of state.logs) logsByDate.set(log.date, log);
+        // Merge localStorage logs — keep richer version per date
+        for (const localLog of localState.logs) {
+          const existing = logsByDate.get(localLog.date);
+          if (!existing) {
+            // Local has a log that Supabase doesn't — keep it
+            logsByDate.set(localLog.date, localLog);
+          } else {
+            // Both have a log for this date — keep whichever has more entries
+            const localEntryCount = Object.keys(localLog.entries).length + Object.keys(localLog.badEntries).length;
+            const remoteEntryCount = Object.keys(existing.entries).length + Object.keys(existing.badEntries).length;
+            if (localEntryCount > remoteEntryCount) {
+              logsByDate.set(localLog.date, localLog);
+            }
+          }
+        }
+        state.logs = Array.from(logsByDate.values()).sort((a, b) => b.date.localeCompare(a.date));
+
+        // XP: trust the higher value (local may have just earned XP that isn't in Supabase yet)
+        state.totalXp = Math.max(state.totalXp, localState.totalXp);
+        state.currentLevel = Math.max(state.currentLevel, localState.currentLevel);
+        state.bareMinimumStreak = Math.max(state.bareMinimumStreak ?? 0, localState.bareMinimumStreak ?? 0);
+
+        // Streaks: keep the higher count for each habit
+        for (const [key, count] of Object.entries(localState.streaks)) {
+          if ((state.streaks[key] ?? 0) < count) {
+            state.streaks[key] = count;
+          }
+        }
+      }
+
+      // Supabase has real data — cache merged result locally
       saveState(state);
       return state;
     } else if (localHasData) {
