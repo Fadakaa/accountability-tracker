@@ -17,6 +17,10 @@ const config: CapacitorConfig = {
       iconColor: "#f97316",
       sound: "default",
     },
+    SpeechRecognition: {
+      language: "en-GB",
+      popup: false,
+    },
   },
 };
 

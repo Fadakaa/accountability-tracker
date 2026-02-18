@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { isCapacitor } from "@/lib/capacitorUtils";
 
 interface VoiceInputProps {
   onTranscript: (text: string) => void;
@@ -9,32 +10,67 @@ interface VoiceInputProps {
 }
 
 /**
- * Voice-to-text button using the Web Speech API.
- * Works on mobile browsers (Chrome, Safari) — tap to start, tap again to stop.
- * Appends transcribed text to the provided callback.
+ * Voice-to-text button.
+ * - On Capacitor (iOS/Android): uses native speech recognition via
+ *   @capacitor-community/speech-recognition for reliable mobile support.
+ * - On web: falls back to the Web Speech API (Chrome, Safari).
+ * Tap to start, tap again to stop. Appends transcribed text via callback.
  */
 export default function VoiceInput({ onTranscript, className = "", label = "🎤" }: VoiceInputProps) {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const recognitionRef = useRef<ReturnType<typeof createRecognition> | null>(null);
 
-  // Check API support on mount so the button renders correctly from the start
+  // Web Speech API ref (browser-only path)
+  const recognitionRef = useRef<ReturnType<typeof createWebRecognition> | null>(null);
+
+  // Native plugin ref — loaded dynamically to avoid SSR/web import issues
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nativePluginRef = useRef<any>(null);
+
+  // Track whether we're on Capacitor (set once on mount)
+  const isNativeRef = useRef(false);
+
+  // Check support on mount
   useEffect(() => {
-    if (
-      typeof window !== "undefined" &&
-      !("webkitSpeechRecognition" in window) &&
-      !("SpeechRecognition" in window)
-    ) {
-      setSupported(false);
+    async function checkSupport() {
+      if (isCapacitor()) {
+        isNativeRef.current = true;
+        try {
+          const { SpeechRecognition } = await import(
+            "@capacitor-community/speech-recognition"
+          );
+          nativePluginRef.current = SpeechRecognition;
+          const { available } = await SpeechRecognition.available();
+          setSupported(available);
+        } catch {
+          setSupported(false);
+        }
+      } else {
+        isNativeRef.current = false;
+        if (
+          typeof window !== "undefined" &&
+          !("webkitSpeechRecognition" in window) &&
+          !("SpeechRecognition" in window)
+        ) {
+          setSupported(false);
+        }
+      }
     }
+    checkSupport();
   }, []);
 
-  // Cleanup: abort any active recognition session on unmount to prevent
-  // orphaned sessions that block future recognition attempts on mobile
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (recognitionRef.current) {
+      if (isNativeRef.current && nativePluginRef.current) {
+        try {
+          nativePluginRef.current.stop();
+          nativePluginRef.current.removeAllListeners();
+        } catch {
+          // Ignore cleanup errors
+        }
+      } else if (recognitionRef.current) {
         try {
           recognitionRef.current.abort();
         } catch {
@@ -45,16 +81,68 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
     };
   }, []);
 
-  const startListening = useCallback(() => {
-    setError(null);
+  // ─── Native (Capacitor) path ───────────────────────────────────
 
+  const startNativeListening = useCallback(async () => {
+    const plugin = nativePluginRef.current;
+    if (!plugin) return;
+
+    try {
+      // Check / request permissions
+      const { speechRecognition } = await plugin.checkPermissions();
+      if (speechRecognition !== "granted") {
+        const result = await plugin.requestPermissions();
+        if (result.speechRecognition !== "granted") {
+          setError("Microphone permission denied — enable in Settings");
+          return;
+        }
+      }
+
+      setListening(true);
+      setError(null);
+
+      // start() returns { matches?: string[] } when partialResults is false
+      const { matches } = await plugin.start({
+        language: "en-GB",
+        maxResults: 1,
+        popup: false,
+        partialResults: false,
+      });
+
+      if (matches && matches.length > 0) {
+        const transcript = matches[0].trim();
+        if (transcript) {
+          onTranscript(transcript);
+        }
+      }
+    } catch (err) {
+      console.error("Native speech recognition error:", err);
+      setError("Voice input failed — try again");
+    } finally {
+      setListening(false);
+    }
+  }, [onTranscript]);
+
+  const stopNativeListening = useCallback(async () => {
+    const plugin = nativePluginRef.current;
+    if (!plugin) return;
+    try {
+      await plugin.stop();
+    } catch {
+      // Ignore — already stopped
+    }
+    setListening(false);
+  }, []);
+
+  // ─── Web Speech API path (browser) ─────────────────────────────
+
+  const startWebListening = useCallback(() => {
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
       setSupported(false);
       return;
     }
 
     // Abort any lingering session before creating a new one.
-    // Some mobile browsers only allow one active instance at a time.
     if (recognitionRef.current) {
       try {
         recognitionRef.current.abort();
@@ -64,7 +152,7 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
       recognitionRef.current = null;
     }
 
-    const recognition = createRecognition();
+    const recognition = createWebRecognition();
     if (!recognition) {
       setSupported(false);
       return;
@@ -73,14 +161,11 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
     recognitionRef.current = recognition;
 
     // continuous = false for reliable mobile behaviour.
-    // Mobile Safari does not support continuous mode well — sessions die
-    // immediately or after brief silence. For short dictations (notes,
-    // reflections) a single-utterance capture is the correct approach.
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-GB";
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: WebSpeechRecognitionEvent) => {
       let transcript = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
@@ -92,19 +177,17 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
       }
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    recognition.onerror = (event: WebSpeechRecognitionErrorEvent) => {
       setListening(false);
       recognitionRef.current = null;
 
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         setError("Microphone blocked — check browser permissions");
       } else if (event.error === "no-speech") {
-        // User didn't speak — not a real error, clear silently
         setError(null);
       } else if (event.error === "network") {
         setError("Network error — speech recognition needs internet");
       } else if (event.error === "aborted") {
-        // Intentional abort (e.g. navigating away) — not an error
         setError(null);
       } else {
         setError("Voice input failed — try again");
@@ -116,8 +199,6 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
       recognitionRef.current = null;
     };
 
-    // Wrap start() in try/catch — on mobile this can throw if permissions
-    // are in a bad state or another recognition instance is still active.
     try {
       recognition.start();
       setListening(true);
@@ -128,7 +209,7 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
     }
   }, [onTranscript]);
 
-  const stopListening = useCallback(() => {
+  const stopWebListening = useCallback(() => {
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -140,8 +221,25 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
     setListening(false);
   }, []);
 
-  // Click handler that stops event propagation so parent touch/click
-  // handlers (e.g. the coach page swipe navigation) don't interfere.
+  // ─── Unified handlers ──────────────────────────────────────────
+
+  const startListening = useCallback(() => {
+    setError(null);
+    if (isNativeRef.current) {
+      startNativeListening();
+    } else {
+      startWebListening();
+    }
+  }, [startNativeListening, startWebListening]);
+
+  const stopListening = useCallback(() => {
+    if (isNativeRef.current) {
+      stopNativeListening();
+    } else {
+      stopWebListening();
+    }
+  }, [stopNativeListening, stopWebListening]);
+
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       e.stopPropagation();
@@ -154,14 +252,19 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
     [listening, startListening, stopListening]
   );
 
+  // ─── Render ────────────────────────────────────────────────────
+
   if (!supported) {
-    // Show disabled state so user knows the feature exists but isn't available
     return (
       <button
         type="button"
         disabled
         className={`rounded-lg opacity-40 cursor-not-allowed ${className}`}
-        title="Voice input not available in this browser — try opening in Chrome or Safari"
+        title={
+          isNativeRef.current
+            ? "Voice input not available on this device"
+            : "Voice input not available in this browser — try Chrome or Safari"
+        }
       >
         🎤 N/A
       </button>
@@ -192,17 +295,18 @@ export default function VoiceInput({ onTranscript, className = "", label = "🎤
   );
 }
 
+// ─── Web Speech API helpers ────────────────────────────────────
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createRecognition(): any {
+function createWebRecognition(): any {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const W = window as any;
-  const SpeechRecognition = W.SpeechRecognition || W.webkitSpeechRecognition;
-  if (!SpeechRecognition) return null;
-  return new SpeechRecognition();
+  const Ctor = W.SpeechRecognition || W.webkitSpeechRecognition;
+  if (!Ctor) return null;
+  return new Ctor();
 }
 
-// Type declaration for SpeechRecognitionEvent
-interface SpeechRecognitionEvent {
+interface WebSpeechRecognitionEvent {
   resultIndex: number;
   results: {
     length: number;
@@ -215,7 +319,6 @@ interface SpeechRecognitionEvent {
   };
 }
 
-// Type declaration for SpeechRecognitionErrorEvent
-interface SpeechRecognitionErrorEvent {
+interface WebSpeechRecognitionErrorEvent {
   error: string;
 }

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { getToday } from "@/lib/store";
+import { getToday, loadExerciseLibrary, mergeIntoExerciseLibrary } from "@/lib/store";
 import type { GymSessionLocal, GymExerciseLocal, GymSetLocal, GymRoutine, GymRoutineExercise } from "@/lib/store";
 import type { TrainingType } from "@/types/database";
 import { XP_VALUES } from "@/lib/habits";
@@ -13,6 +13,12 @@ import {
   loadGymSessionsFromDB, saveGymSessionToDB,
   loadGymRoutinesFromDB, saveGymRoutineToDB, deleteGymRoutineFromDB,
 } from "@/lib/db";
+import { isCapacitor } from "@/lib/capacitorUtils";
+import { callProviderDirectly, hasLocalCoachKey } from "@/lib/coach/providers";
+import type { CoachMessage } from "@/lib/coach/providers";
+import { buildExtractionPrompt } from "@/lib/gym/extractionPrompt";
+import { parseExtractionResponse } from "@/lib/gym/parseExtraction";
+import type { ExtractionResult } from "@/lib/gym/parseExtraction";
 
 // ─── Constants ──────────────────────────────────────────────
 const MUSCLE_GROUPS = ["Chest", "Back", "Shoulders", "Arms", "Legs", "Core", "Full Body"];
@@ -26,7 +32,7 @@ const COMMON_EXERCISES: Record<string, string[]> = {
   "Full Body": ["Clean & Press", "Thruster", "Burpees", "Turkish Get Up"],
 };
 
-type Phase = "setup" | "logging" | "complete" | "archive" | "routines";
+type Phase = "setup" | "voice" | "logging" | "complete" | "archive" | "routines";
 
 export default function GymPage() {
   const { state, settings, dbHabits, loading, saveState: dbSaveState, recalcStreaks } = useDB();
@@ -38,6 +44,13 @@ export default function GymPage() {
   const [notes, setNotes] = useState("");
   const [durationMinutes, setDurationMinutes] = useState<number | null>(null);
   const [savedSession, setSavedSession] = useState<GymSessionLocal | null>(null);
+
+  // Voice extraction state
+  const [transcript, setTranscript] = useState("");
+  const [extractedData, setExtractedData] = useState<ExtractionResult | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [voiceStep, setVoiceStep] = useState<"record" | "transcript" | "review">("record");
 
   // Past sessions for history (async from DB)
   const [pastSessions, setPastSessions] = useState<GymSessionLocal[]>([]);
@@ -191,6 +204,121 @@ export default function GymPage() {
     );
   }
 
+  // ─── Voice Extraction ─────────────────────────────────
+  const handleExtract = useCallback(async () => {
+    if (!transcript.trim()) return;
+    setExtracting(true);
+    setExtractError(null);
+
+    try {
+      const exerciseLibrary = loadExerciseLibrary();
+      // Use most recent gym session with exercises as context
+      const lastGymSession = pastSessions.find(
+        (s) => s.trainingType === "gym" && s.exercises.length > 0,
+      ) ?? null;
+
+      const systemPrompt = buildExtractionPrompt(exerciseLibrary, lastGymSession);
+      const messages: CoachMessage[] = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: transcript.trim() },
+      ];
+
+      let content: string;
+
+      if (isCapacitor()) {
+        // Native: call AI provider directly using locally stored API key
+        const response = await callProviderDirectly(
+          messages,
+          settings.coachSettings?.provider as "anthropic" | "openai" | "google" | undefined,
+          settings.coachSettings?.model,
+        );
+        content = response.content;
+      } else {
+        // Web: proxy via Next.js API route
+        const { createClient } = await import("@supabase/supabase-js");
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        );
+        const { data: { session: authSession } } = await supabase.auth.getSession();
+        if (!authSession) {
+          setExtractError("Not signed in. Sign in to use voice extraction.");
+          return;
+        }
+        const res = await fetch("/api/gym/extract", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authSession.access_token}`,
+          },
+          body: JSON.stringify({
+            transcript: transcript.trim(),
+            provider: settings.coachSettings?.provider,
+            model: settings.coachSettings?.model,
+            exerciseLibrary: loadExerciseLibrary(),
+            lastSession: lastGymSession,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setExtractError(data.error || "Extraction failed.");
+          return;
+        }
+        content = data.content;
+      }
+
+      // Parse the AI response
+      const result = parseExtractionResponse(content);
+      if ("error" in result) {
+        setExtractError(result.error);
+      } else {
+        setExtractedData(result);
+        setVoiceStep("review");
+      }
+    } catch (err) {
+      console.error("[gym/extract] Error:", err);
+      setExtractError(
+        err instanceof Error ? err.message : "Extraction failed — try again.",
+      );
+    } finally {
+      setExtracting(false);
+    }
+  }, [transcript, pastSessions, settings]);
+
+  function handleConfirmExtraction() {
+    if (!extractedData) return;
+
+    // Pre-fill all state from extracted data
+    setTrainingType(extractedData.trainingType || "gym");
+    setMuscleGroup(extractedData.muscleGroup || "");
+    setDurationMinutes(extractedData.durationMinutes);
+    setRpe(extractedData.rpe);
+    setNotes(extractedData.notes || "");
+
+    // Convert extracted exercises to GymExerciseLocal[] with UUIDs
+    setExercises(
+      extractedData.exercises.map((ex) => ({
+        id: crypto.randomUUID(),
+        name: ex.name,
+        sets: ex.sets.map((s) => ({
+          weightKg: s.weightKg,
+          reps: s.reps,
+          isFailure: s.isFailure,
+        })),
+      })),
+    );
+
+    // Merge new exercise names into library
+    mergeIntoExerciseLibrary(extractedData.exercises.map((e) => e.name));
+
+    // Reset voice state and go to logging phase
+    setTranscript("");
+    setExtractedData(null);
+    setExtractError(null);
+    setVoiceStep("record");
+    setPhase("logging");
+  }
+
   // ─── Save Session ──────────────────────────────────────
   function handleSave() {
     const session: GymSessionLocal = {
@@ -206,6 +334,11 @@ export default function GymPage() {
       createdAt: new Date().toISOString(),
     };
     saveGymSessionToDB(session);
+
+    // Save exercise names to library for future voice extraction
+    if (exercises.length > 0) {
+      mergeIntoExerciseLibrary(exercises.map((e) => e.name));
+    }
 
     // Update state — mark training as done + add XP
     const currentState = { ...state, logs: state.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } })) };
@@ -385,6 +518,20 @@ export default function GymPage() {
           </section>
         )}
 
+        {/* Voice Record */}
+        <button
+          onClick={() => {
+            setPhase("voice");
+            setVoiceStep("record");
+            setTranscript("");
+            setExtractedData(null);
+            setExtractError(null);
+          }}
+          className="w-full rounded-xl bg-surface-800 border border-brand/40 py-4 mb-3 text-brand font-bold text-base active:scale-[0.98] transition-all hover:border-brand/60"
+        >
+          🎤 Record Workout
+        </button>
+
         <button
           onClick={handleStartLogging}
           className="w-full rounded-xl bg-brand hover:bg-brand-dark py-4 text-white font-bold text-base active:scale-[0.98] transition-all mt-auto mb-4"
@@ -411,6 +558,280 @@ export default function GymPage() {
             </button>
           )}
         </div>
+      </div>
+    );
+  }
+
+  // ─── Voice Phase ──────────────────────────────────────
+  if (phase === "voice") {
+    // Check if AI key is configured
+    const hasAIKey = isCapacitor()
+      ? hasLocalCoachKey()
+      : !!settings.coachSettings?.provider;
+
+    if (!hasAIKey) {
+      return (
+        <div className="flex flex-col min-h-screen px-4 py-6">
+          <header className="mb-6">
+            <button
+              onClick={() => setPhase("setup")}
+              className="text-neutral-500 text-sm hover:text-neutral-300"
+            >
+              ← Back
+            </button>
+            <h1 className="text-xl font-bold mt-1">🎤 Record Workout</h1>
+          </header>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center space-y-4">
+              <div className="text-4xl">🔑</div>
+              <p className="text-neutral-400 text-sm max-w-[260px]">
+                Voice extraction needs an AI provider. Add your API key in Settings.
+              </p>
+              <Link
+                href="/settings"
+                className="inline-block rounded-xl bg-brand px-6 py-3 text-sm font-bold text-white"
+              >
+                Open Settings →
+              </Link>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col min-h-screen px-4 py-6">
+        <header className="mb-6">
+          <button
+            onClick={() => setPhase("setup")}
+            className="text-neutral-500 text-sm hover:text-neutral-300"
+          >
+            ← Back
+          </button>
+          <h1 className="text-xl font-bold mt-1">🎤 Record Workout</h1>
+        </header>
+
+        {/* ── Record sub-step ── */}
+        {voiceStep === "record" && (
+          <div className="flex-1 flex flex-col">
+            <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
+              <div className="relative">
+                <VoiceInput
+                  onTranscript={(text) =>
+                    setTranscript((prev) => (prev ? `${prev} ${text}` : text))
+                  }
+                  className="px-8 py-6 text-xl"
+                  label="🎤 Tap to Record"
+                />
+              </div>
+              <div className="space-y-2 max-w-[300px]">
+                <p className="text-sm text-neutral-400">
+                  Talk naturally — I&apos;ll turn it into sets, reps, and weights.
+                </p>
+                <p className="text-[11px] text-neutral-600 italic">
+                  e.g. &quot;Bench press: 4 sets. 8 reps at 100kg, 8 at 100, 7 at 100, 6 at 100. RPE 8.&quot;
+                </p>
+              </div>
+            </div>
+
+            {/* Accumulated transcript preview */}
+            {transcript && (
+              <div className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
+                    Transcript
+                  </span>
+                  <button
+                    onClick={() => setTranscript("")}
+                    className="text-xs text-neutral-600 hover:text-missed transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <p className="text-sm text-neutral-300 whitespace-pre-wrap">{transcript}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-auto mb-4">
+              <button
+                onClick={() => setPhase("setup")}
+                className="flex-1 rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 font-medium"
+              >
+                Cancel
+              </button>
+              {transcript && (
+                <button
+                  onClick={() => setVoiceStep("transcript")}
+                  className="flex-1 rounded-xl bg-brand py-3 text-sm text-white font-bold active:scale-[0.98] transition-all"
+                >
+                  Next: Review Transcript →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Transcript editing sub-step ── */}
+        {voiceStep === "transcript" && (
+          <div className="flex-1 flex flex-col">
+            <div className="rounded-xl bg-surface-800 border border-surface-700 p-4 mb-4 flex-1">
+              <label className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-2 block">
+                Edit Transcript
+              </label>
+              <p className="text-[11px] text-neutral-600 mb-3">
+                Fix any transcription errors before extracting.
+              </p>
+              <textarea
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+                rows={8}
+                className="w-full bg-surface-700 rounded-lg px-4 py-3 text-sm text-white border-none outline-none resize-none focus:ring-2 focus:ring-brand/50"
+              />
+            </div>
+
+            {extractError && (
+              <div className="rounded-lg bg-missed/10 border border-missed/20 px-4 py-3 mb-4">
+                <p className="text-xs text-missed">{extractError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-auto mb-4">
+              <button
+                onClick={() => {
+                  setVoiceStep("record");
+                  setExtractError(null);
+                }}
+                className="flex-1 rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 font-medium"
+              >
+                ← Re-record
+              </button>
+              <button
+                onClick={handleExtract}
+                disabled={extracting || !transcript.trim()}
+                className="flex-1 rounded-xl bg-brand py-3 text-sm text-white font-bold active:scale-[0.98] transition-all disabled:opacity-50"
+              >
+                {extracting ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Extracting...
+                  </span>
+                ) : (
+                  "Extract Workout →"
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Review sub-step ── */}
+        {voiceStep === "review" && extractedData && (
+          <div className="flex-1 flex flex-col">
+            <div className="rounded-xl bg-surface-800 border border-brand/30 p-4 mb-4">
+              <p className="text-xs font-bold text-brand uppercase tracking-wider mb-3">
+                Here&apos;s what I captured
+              </p>
+
+              {/* Session summary */}
+              <div className="flex items-center gap-2 mb-4 text-sm text-neutral-300">
+                <span>
+                  {extractedData.trainingType === "gym"
+                    ? `🏋️ ${extractedData.muscleGroup || "Gym"}`
+                    : extractedData.trainingType === "bjj"
+                      ? "🥋 BJJ"
+                      : "🏃 Run"}
+                </span>
+                {extractedData.durationMinutes && (
+                  <span className="text-neutral-500">• {extractedData.durationMinutes} min</span>
+                )}
+                {extractedData.rpe && (
+                  <span
+                    className={`font-bold ${
+                      extractedData.rpe >= 8
+                        ? "text-missed"
+                        : extractedData.rpe >= 5
+                          ? "text-later"
+                          : "text-done"
+                    }`}
+                  >
+                    RPE {extractedData.rpe}
+                  </span>
+                )}
+              </div>
+
+              {/* Exercises */}
+              <div className="space-y-3 mb-4">
+                {extractedData.exercises.map((ex, i) => {
+                  const hasNullWeight = ex.sets.some((s) => s.weightKg === null);
+                  return (
+                    <div key={i}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-semibold text-neutral-200">{ex.name}</span>
+                        {hasNullWeight && (
+                          <span className="text-[10px] text-later font-medium">
+                            ⚠️ missing weight
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {ex.sets.map((s, j) => (
+                          <span
+                            key={j}
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${
+                              s.isFailure
+                                ? "bg-missed/20 text-missed"
+                                : "bg-surface-600 text-neutral-400"
+                            }`}
+                          >
+                            {s.weightKg != null ? `${s.weightKg}kg` : "?kg"} x{" "}
+                            {s.reps ?? "?"}
+                            {s.isFailure && " F"}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Notes */}
+              {extractedData.notes && (
+                <p className="text-xs text-neutral-500 italic mb-2">
+                  &quot;{extractedData.notes}&quot;
+                </p>
+              )}
+
+              {/* Warnings */}
+              {extractedData.exercises.some((ex) =>
+                ex.sets.some((s) => s.weightKg === null),
+              ) && (
+                <div className="rounded-lg bg-later/10 border border-later/20 px-3 py-2 mt-3">
+                  <p className="text-[11px] text-later">
+                    Some weights are missing — you can fill them in on the next screen.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 mt-auto mb-4">
+              <button
+                onClick={() => {
+                  setExtractedData(null);
+                  setVoiceStep("record");
+                  setTranscript("");
+                }}
+                className="flex-1 rounded-xl bg-surface-800 border border-surface-700 py-3 text-sm text-neutral-400 font-medium"
+              >
+                🎤 Re-record
+              </button>
+              <button
+                onClick={handleConfirmExtraction}
+                className="flex-1 rounded-xl bg-brand py-3 text-sm text-white font-bold active:scale-[0.98] transition-all"
+              >
+                Confirm & Edit →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

@@ -308,10 +308,11 @@ export default function Home() {
           <h3 className="text-[9px] font-bold text-blue-400/70 uppercase tracking-[0.15em] mb-2 px-1">
             Reflect
           </h3>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <NavTile icon="📊" label="Weekly" href="/weekly" compact />
             <NavTile icon="🔍" label="Insights" href="/insights" compact />
             <NavTile icon="🌳" label="Tree" href="/tree" compact />
+            <NavTile icon="🏆" label="Badges" href="/badges" compact />
           </div>
         </div>
 

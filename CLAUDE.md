@@ -2,6 +2,8 @@
 
 ## Rules for AI Agents
 
+- **Before finishing ANY task, run `npm test` and `npm run build`. Do not consider work complete if either fails.**
+- If you modify a function that has tests, update the tests to match. If you add new business logic, add tests for it.
 - Do not change the visual design without explicit approval
 - Do not rearrange the dashboard layout
 - Always explore the codebase before writing code
@@ -324,10 +326,13 @@ User Action → Page Component → store.ts (localStorage) → useDB hook → db
 ## 10. Build & Deploy
 
 ```bash
+# Run tests (REQUIRED before completing any task)
+npm test
+
 # Dev server
 npm run dev
 
-# Production build
+# Production build (REQUIRED before completing any task)
 npm run build
 
 # Capacitor (iOS)
@@ -336,6 +341,8 @@ npm run cap:ios     # builds static export + syncs + opens Xcode
 # Capacitor (Android)
 npm run cap:android
 ```
+
+**Testing**: Vitest with happy-dom. Tests live in `src/lib/__tests__/`. Run `npm test` to execute all tests, `npm run test:watch` for watch mode. Tests cover: completion stats, analytics, streaks/XP/levels, scheduling, habits, weakness detection.
 
 **Deployment**: Vercel (auto-deploy from git)
 - `vercel.json` configures a cron job at `/api/cron/notify` (every 15 minutes)
