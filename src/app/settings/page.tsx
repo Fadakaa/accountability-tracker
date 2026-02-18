@@ -88,9 +88,26 @@ export default function SettingsPage() {
     const swapIdx = direction === "up" ? idx - 1 : idx + 1;
     const swapHabit = stackHabits[swapIdx];
 
-    // Swap sort orders
-    updateHabit(habit.id, { sort_order: swapHabit.sort_order });
-    updateHabit(swapHabit.id, { sort_order: habit.sort_order });
+    // Swap sort orders — must update BOTH overrides in a single settings write
+    // to avoid the second updateHabit() overwriting the first (stale localSettings)
+    if (!localSettings) return;
+    const newSettings = {
+      ...localSettings,
+      habitOverrides: {
+        ...localSettings.habitOverrides,
+        [habit.id]: {
+          ...localSettings.habitOverrides[habit.id],
+          sort_order: swapHabit.sort_order,
+        },
+        [swapHabit.id]: {
+          ...localSettings.habitOverrides[swapHabit.id],
+          sort_order: habit.sort_order,
+        },
+      },
+    };
+    setLocalSettings(newSettings);
+    dbSaveSettings(newSettings);
+    setHabits(getResolvedHabits(false, dbHabits, newSettings));
   }
 
   function resetToDefaults() {
