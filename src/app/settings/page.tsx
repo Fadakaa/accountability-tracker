@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { loadSettings as loadSettingsLocal, loadState as loadStateLocal, DEFAULT_NOTIFICATION_SLOTS, recalculateStreaks, getLevelForXP, clearAllLocalData } from "@/lib/store";
-import type { UserSettings, HabitOverride, LocalState, NotificationSlot } from "@/lib/store";
+import type { UserSettings, HabitOverride, LocalState, NotificationSlot, ChainItem } from "@/lib/store";
 import { HABITS, DEFAULT_QUOTES } from "@/lib/habits";
 import type { QuoteCategory } from "@/lib/habits";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -88,9 +88,19 @@ export default function SettingsPage() {
     const swapIdx = direction === "up" ? idx - 1 : idx + 1;
     const swapHabit = stackHabits[swapIdx];
 
-    // Swap sort orders — must update BOTH overrides in a single settings write
-    // to avoid the second updateHabit() overwriting the first (stale localSettings)
     if (!localSettings) return;
+
+    // Sync routineChains: swap positions of the two habits in the chain
+    const chains = { ...localSettings.routineChains };
+    const chain = [...(chains[habit.stack] || [])];
+    const chainIdxA = chain.findIndex((item) => item.habitId === habit.id);
+    const chainIdxB = chain.findIndex((item) => item.habitId === swapHabit.id);
+    if (chainIdxA !== -1 && chainIdxB !== -1) {
+      [chain[chainIdxA], chain[chainIdxB]] = [chain[chainIdxB], chain[chainIdxA]];
+    }
+    chains[habit.stack] = chain;
+
+    // Swap sort orders — must update BOTH overrides in a single settings write
     const newSettings = {
       ...localSettings,
       habitOverrides: {
@@ -104,6 +114,7 @@ export default function SettingsPage() {
           sort_order: habit.sort_order,
         },
       },
+      routineChains: chains,
     };
     setLocalSettings(newSettings);
     dbSaveSettings(newSettings);
@@ -184,9 +195,36 @@ export default function SettingsPage() {
                     isFirst={idx === 0}
                     isLast={idx === byStack[stack.key].length - 1}
                     onStackChange={(newStack) => {
+                      if (newStack === habit.stack) return;
+                      if (!localSettings) return;
                       const targetHabits = habits.filter((h) => h.stack === newStack && h.is_active);
                       const maxOrder = targetHabits.reduce((max, h) => Math.max(max, h.sort_order), 0);
-                      updateHabit(habit.id, { stack: newStack, sort_order: maxOrder + 1 });
+
+                      // Sync routineChains: move habit from old stack chain to new
+                      const chains = { ...localSettings.routineChains };
+                      chains[habit.stack] = (chains[habit.stack] || []).filter(
+                        (item) => item.habitId !== habit.id
+                      );
+                      chains[newStack] = [
+                        ...(chains[newStack] || []),
+                        { id: `h-${habit.id}`, type: "habit" as const, habitId: habit.id },
+                      ];
+
+                      const newSettings = {
+                        ...localSettings,
+                        habitOverrides: {
+                          ...localSettings.habitOverrides,
+                          [habit.id]: {
+                            ...localSettings.habitOverrides[habit.id],
+                            stack: newStack,
+                            sort_order: maxOrder + 1,
+                          },
+                        },
+                        routineChains: chains,
+                      };
+                      setLocalSettings(newSettings);
+                      dbSaveSettings(newSettings);
+                      setHabits(getResolvedHabits(false, dbHabits, newSettings));
                     }}
                     onBareMinToggle={() => {
                       updateHabit(habit.id, { is_bare_minimum: !habit.is_bare_minimum });

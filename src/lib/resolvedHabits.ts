@@ -30,13 +30,47 @@ export function getResolvedHabits(
   dbHabits?: Habit[] | null,
   settingsOverride?: UserSettings
 ): ResolvedHabit[] {
-  // If we have DB habits, use them directly (they already include overrides + custom habits)
+  // If we have DB habits, use them as a base but still apply local overrides
+  // (the settings page writes overrides to habitOverrides which must be applied)
   if (dbHabits && dbHabits.length > 0) {
-    const all = dbHabits.map((habit) => ({
-      ...habit,
-      isRetired: !habit.is_active,
-      isDefault: DEFAULT_HABIT_IDS.has(habit.id),
-    } as ResolvedHabit)).sort((a, b) => a.sort_order - b.sort_order);
+    const overrideSettings = settingsOverride ?? loadSettings();
+    const overrides = overrideSettings.habitOverrides ?? {};
+
+    const all = dbHabits.map((habit) => {
+      const override = overrides[habit.id];
+      const resolved: ResolvedHabit = {
+        ...habit,
+        stack: override?.stack ?? habit.stack,
+        is_bare_minimum: override?.is_bare_minimum ?? habit.is_bare_minimum,
+        is_active: override?.is_active ?? habit.is_active,
+        current_level: override?.current_level ?? habit.current_level,
+        sort_order: override?.sort_order ?? habit.sort_order,
+        isRetired: false,
+        isDefault: DEFAULT_HABIT_IDS.has(habit.id),
+      };
+      if (!resolved.is_active) resolved.isRetired = true;
+      return resolved;
+    }).sort((a, b) => a.sort_order - b.sort_order);
+
+    // Also include custom habits from settings that aren't in DB yet
+    const dbIds = new Set(dbHabits.map((h) => h.id));
+    const customHabits = overrideSettings.customHabits ?? [];
+    for (const ch of customHabits) {
+      if (!dbIds.has(ch.id)) {
+        const override = overrides[ch.id];
+        all.push({
+          ...ch,
+          stack: override?.stack ?? ch.stack,
+          is_bare_minimum: override?.is_bare_minimum ?? ch.is_bare_minimum,
+          is_active: override?.is_active ?? ch.is_active,
+          current_level: override?.current_level ?? ch.current_level,
+          sort_order: override?.sort_order ?? ch.sort_order,
+          isRetired: !(override?.is_active ?? ch.is_active),
+          isDefault: false,
+        } as ResolvedHabit);
+      }
+    }
+    all.sort((a, b) => a.sort_order - b.sort_order);
 
     if (includeInactive) return all;
     return all.filter((h) => h.is_active);

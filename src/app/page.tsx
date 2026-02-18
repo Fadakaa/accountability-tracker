@@ -333,7 +333,6 @@ export default function Home() {
             Design
           </h3>
           <div className="grid grid-cols-2 gap-2">
-            <NavTile icon="🔗" label="My Routine" href="/routine" subtle />
             <NavTile icon="⚙️" label="Settings" href="/settings" subtle />
           </div>
         </div>
