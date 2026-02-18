@@ -2,8 +2,8 @@
 // Handles: permission, 3x daily check-ins, Fibonacci escalation,
 // 11PM warning, midnight auto-miss
 
-import { getRandomQuote } from "./habits";
-import { loadState, saveState, getToday, loadSettings, recalculateStreaks } from "./store";
+import { getRandomQuote, XP_VALUES } from "./habits";
+import { loadState, saveState, getToday, loadSettings, recalculateStreaks, getLevelForXP } from "./store";
 import { getResolvedHabits } from "./resolvedHabits";
 import { isStackComplete as sharedIsStackComplete, areAllStacksComplete, getCheckinSchedule, getCurrentTime, STACK_ORDER } from "./schedule";
 import type { HabitStack } from "@/types/database";
@@ -424,17 +424,51 @@ function tickEndOfDay(): void {
     notifStateChanged = true;
   }
 
-  // Midnight — auto-mark all unlogged as missed (range check: 00:00-00:04)
+  // Midnight — auto-finalize partial saves + mark unlogged as missed (range check: 00:00-00:04)
   const yesterdayForCheck = new Date(now);
   yesterdayForCheck.setDate(yesterdayForCheck.getDate() - 1);
   const yesterdayCheckStr = yesterdayForCheck.toISOString().slice(0, 10);
   if (hour === 0 && minute <= 4 && notifState.lastMidnightMiss !== yesterdayCheckStr) {
-    const yesterdayLog = state.logs.find((l) => l.date === yesterdayCheckStr);
+    let yesterdayLog = state.logs.find((l) => l.date === yesterdayCheckStr);
 
-    const allHabits = getResolvedHabits().filter((h) => isBinaryLike(h.category) && h.is_active);
+    const allResolved = getResolvedHabits();
+    const allBinaryHabits = allResolved.filter((h) => isBinaryLike(h.category) && h.is_active);
+    const allMeasuredHabits = allResolved.filter((h) => h.category === "measured" && h.is_active);
+    const allBadHabits = allResolved.filter((h) => h.category === "bad" && h.is_active);
     let missedCount = 0;
 
-    for (const habit of allHabits) {
+    // If there's a partial save (has some entries but xpEarned is 0), award XP for what was logged
+    const hasPartialEntries = yesterdayLog && Object.keys(yesterdayLog.entries).length > 0 && yesterdayLog.xpEarned === 0;
+    let partialXp = 0;
+
+    if (hasPartialEntries && yesterdayLog) {
+      // Award XP for binary habits that were marked done
+      for (const habit of allBinaryHabits) {
+        const entry = yesterdayLog.entries[habit.id];
+        if (entry?.status === "done") {
+          partialXp += habit.is_bare_minimum ? XP_VALUES.BARE_MINIMUM_HABIT : XP_VALUES.STRETCH_HABIT;
+        }
+      }
+      // Award XP for measured habits with values
+      for (const habit of allMeasuredHabits) {
+        const entry = yesterdayLog.entries[habit.id];
+        if (entry?.value && entry.value > 0) {
+          partialXp += XP_VALUES.MEASURED_AT_TARGET;
+        }
+      }
+      // Award XP for bad habits that were logged
+      for (const habit of allBadHabits) {
+        const entry = yesterdayLog.badEntries[habit.id];
+        if (entry?.occurred === false) {
+          partialXp += XP_VALUES.ZERO_BAD_HABIT_DAY;
+        } else if (entry?.occurred === true) {
+          partialXp += XP_VALUES.LOG_BAD_HABIT_HONESTLY;
+        }
+      }
+    }
+
+    // Mark all unlogged binary habits as missed
+    for (const habit of allBinaryHabits) {
       const entry = yesterdayLog?.entries[habit.id];
       if (!entry || (entry.status !== "done" && entry.status !== "missed")) {
         // Auto-miss
@@ -445,34 +479,60 @@ function tickEndOfDay(): void {
       }
     }
 
-    if (missedCount > 0) {
+    if (missedCount > 0 || partialXp > 0) {
       if (!yesterdayLog) {
-        state.logs.push({
+        yesterdayLog = {
           date: yesterdayCheckStr,
           entries: Object.fromEntries(
-            allHabits.map((h) => [h.id, { status: "missed" as const, value: null }])
+            allBinaryHabits.map((h) => [h.id, { status: "missed" as const, value: null }])
           ),
           badEntries: {},
           xpEarned: 0,
           bareMinimumMet: false,
           submittedAt: new Date().toISOString(),
-        });
+        };
+        state.logs.push(yesterdayLog);
+      }
+
+      // Check bare minimum for partial saves
+      const allBareMinHabits = allResolved.filter((h) => h.is_bare_minimum && h.is_active);
+      const bareMinMet = allBareMinHabits.every((h) => yesterdayLog!.entries[h.id]?.status === "done");
+
+      if (partialXp > 0) {
+        if (bareMinMet) {
+          partialXp += XP_VALUES.ALL_BARE_MINIMUM;
+        }
+        yesterdayLog.xpEarned = partialXp;
+        yesterdayLog.bareMinimumMet = bareMinMet;
+        state.totalXp += partialXp;
+        state.currentLevel = getLevelForXP(state.totalXp).level;
+        if (bareMinMet) {
+          state.bareMinimumStreak = (state.bareMinimumStreak || 0) + 1;
+        }
       }
 
       // Recalculate all streaks from log history (source of truth)
-      const allResolved = getResolvedHabits();
       const habitSlugsById: Record<string, string> = {};
       for (const h of allResolved) { habitSlugsById[h.id] = h.slug; }
       state.streaks = recalculateStreaks(state, habitSlugsById);
 
       saveState(state);
 
-      showNotification(
-        "Yesterday wasn't logged",
-        `${missedCount} habits marked as missed. Today's a new day — let's go.`,
-        "midnight-auto-miss",
-        "/checkin"
-      );
+      if (partialXp > 0) {
+        showNotification(
+          "Partial check-in finalized",
+          `+${partialXp} XP from saved progress. ${missedCount > 0 ? `${missedCount} unlogged habits marked as missed.` : ""} New day — let's go.`,
+          "midnight-auto-miss",
+          "/checkin"
+        );
+      } else {
+        showNotification(
+          "Yesterday wasn't logged",
+          `${missedCount} habits marked as missed. Today's a new day — let's go.`,
+          "midnight-auto-miss",
+          "/checkin"
+        );
+      }
     }
     notifState.lastMidnightMiss = yesterdayCheckStr;
     notifStateChanged = true;

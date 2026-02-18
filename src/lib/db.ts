@@ -16,6 +16,7 @@ import {
   recordAppOpen,
   loadShowingUpData,
   getToday,
+  mergeDayLogs,
 } from "@/lib/store";
 import type {
   LocalState,
@@ -186,19 +187,15 @@ export async function loadStateFromDB(): Promise<LocalState> {
         const logsByDate = new Map<string, typeof state.logs[0]>();
         // Start with Supabase logs
         for (const log of state.logs) logsByDate.set(log.date, log);
-        // Merge localStorage logs — keep richer version per date
+        // Merge localStorage logs — union entries per date so partial saves aren't lost
         for (const localLog of localState.logs) {
           const existing = logsByDate.get(localLog.date);
           if (!existing) {
             // Local has a log that Supabase doesn't — keep it
             logsByDate.set(localLog.date, localLog);
           } else {
-            // Both have a log for this date — keep whichever has more entries
-            const localEntryCount = Object.keys(localLog.entries).length + Object.keys(localLog.badEntries).length;
-            const remoteEntryCount = Object.keys(existing.entries).length + Object.keys(existing.badEntries).length;
-            if (localEntryCount > remoteEntryCount) {
-              logsByDate.set(localLog.date, localLog);
-            }
+            // Both have a log for this date — merge entries from both sides
+            logsByDate.set(localLog.date, mergeDayLogs(existing, localLog));
           }
         }
         state.logs = Array.from(logsByDate.values()).sort((a, b) => b.date.localeCompare(a.date));

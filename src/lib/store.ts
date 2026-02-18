@@ -6,20 +6,24 @@ import type { LogStatus, SprintIntensity, TrainingType, HabitStack, Habit } from
 const STORAGE_KEY = "accountability-tracker";
 const GYM_STORAGE_KEY = "accountability-gym";
 const GYM_ROUTINES_KEY = "accountability-gym-routines";
+const GYM_EXERCISES_KEY = "accountability-gym-exercises";
 const SETTINGS_KEY = "accountability-settings";
 const DEFERRED_KEY = "accountability-deferred";
 const ADMIN_KEY = "accountability-admin";
 const SHOWING_UP_KEY = "accountability-showing-up";
+const BADGES_KEY = "accountability-badges";
 
 // All app-specific localStorage keys (for clearing on sign-out)
 const ALL_STORAGE_KEYS = [
   STORAGE_KEY,
   GYM_STORAGE_KEY,
   GYM_ROUTINES_KEY,
+  GYM_EXERCISES_KEY,
   SETTINGS_KEY,
   DEFERRED_KEY,
   ADMIN_KEY,
   SHOWING_UP_KEY,
+  BADGES_KEY,
   "accountability-migrated",
   "accountability-habit-id-map",
   "accountability-notifications",
@@ -407,6 +411,49 @@ export interface DayLog {
   submittedAt: string;
 }
 
+/**
+ * Merge two DayLogs for the same date by taking the union of all entries.
+ * For overlapping habit entries, prefer whichever has a non-null status.
+ * Keeps the higher XP and the more recent submittedAt.
+ */
+export function mergeDayLogs(a: DayLog, b: DayLog): DayLog {
+  const merged: DayLog = {
+    date: a.date,
+    entries: { ...a.entries },
+    badEntries: { ...a.badEntries },
+    xpEarned: Math.max(a.xpEarned, b.xpEarned),
+    bareMinimumMet: a.bareMinimumMet || b.bareMinimumMet,
+    submittedAt: a.submittedAt > b.submittedAt ? a.submittedAt : b.submittedAt,
+  };
+
+  // Union entries from b — only overwrite if a's entry has no status
+  for (const [id, entry] of Object.entries(b.entries)) {
+    const existing = merged.entries[id];
+    if (!existing || !existing.status) {
+      merged.entries[id] = entry;
+    }
+  }
+
+  // Union bad entries from b — only overwrite if a's entry has no occurred value
+  for (const [id, entry] of Object.entries(b.badEntries)) {
+    const existing = merged.badEntries[id];
+    if (!existing || existing.occurred == null) {
+      merged.badEntries[id] = entry;
+    }
+  }
+
+  // Keep admin summary from whichever has it (prefer the one with more tasks)
+  const aAdmin = a.adminSummary;
+  const bAdmin = b.adminSummary;
+  if (aAdmin && bAdmin) {
+    merged.adminSummary = (aAdmin.total >= bAdmin.total) ? aAdmin : bAdmin;
+  } else {
+    merged.adminSummary = aAdmin || bAdmin;
+  }
+
+  return merged;
+}
+
 export interface SprintTask {
   id: string;
   parentId: string | null;
@@ -437,6 +484,13 @@ export interface WrapReflection {
   forwardIntention?: string;
 }
 
+export interface StreakShield {
+  habitSlug: string;
+  available: boolean;       // earned after 14-day streak
+  usedDate: string | null;  // ISO date when shield was consumed (one per month)
+  earnedDate: string | null; // when the shield was earned
+}
+
 export interface LocalState {
   totalXp: number;
   currentLevel: number;
@@ -447,6 +501,7 @@ export interface LocalState {
   sprintHistory: SprintData[];
   reflections?: WrapReflection[];
   lastWrapDate?: string;        // date of last completed weekly wrap
+  streakShields?: Record<string, StreakShield>; // habit slug -> shield state
 }
 
 const DEFAULT_STATE: LocalState = {
@@ -520,10 +575,14 @@ export function getTodayLog(state: LocalState): DayLog | undefined {
  *
  * IMPORTANT: Walks backwards day-by-day (not just through logged dates) so that
  * any day without a "done" entry breaks the streak — even if nothing was logged.
+ *
+ * Streak Shield: if a habit has an available shield (earned at 14+ day streak),
+ * one missed day per month can be absorbed without breaking the streak.
  */
 export function recalculateStreaks(state: LocalState, habitSlugsById: Record<string, string>): Record<string, number> {
   const today = getToday();
   const streaks: Record<string, number> = {};
+  const shields = state.streakShields ?? {};
 
   // Get all unique habit IDs that have ever been logged
   const allHabitIds = new Set<string>();
@@ -548,13 +607,24 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
     const todayEntry = todayLog?.entries[habitId];
     let startDate: string;
 
+    // Check if shield can absorb today's miss
+    const shield = shields[slug];
+    const shieldUsable = shield?.available && !isShieldUsedThisMonth(shield.usedDate);
+
     if (todayEntry?.status === "done") {
       // Today is done — start counting from today
       startDate = today;
     } else if (todayEntry?.status === "missed") {
-      // Today is explicitly missed — streak is 0
-      streaks[slug] = 0;
-      continue;
+      // Today is explicitly missed — check shield
+      if (shieldUsable && (state.streaks[slug] ?? 0) >= 14) {
+        // Shield absorbs the miss — streak continues from yesterday
+        const d = new Date(today + "T12:00:00");
+        d.setDate(d.getDate() - 1);
+        startDate = d.toISOString().slice(0, 10);
+      } else {
+        streaks[slug] = 0;
+        continue;
+      }
     } else {
       // Today not logged, "later" (deferred), or no entry — grace period,
       // start counting from yesterday since the day isn't over yet
@@ -566,6 +636,7 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
     // Walk backwards day-by-day from startDate (max 365 days safety)
     const cursor = new Date(startDate + "T12:00:00");
     let steps = 0;
+    let shieldUsedInWalk = false;
     while (steps < 365) {
       const dateStr = cursor.toISOString().slice(0, 10);
       const log = logByDate.get(dateStr);
@@ -574,8 +645,17 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
         streak++;
         cursor.setDate(cursor.getDate() - 1);
         steps++;
+      } else if (
+        !shieldUsedInWalk &&
+        shieldUsable &&
+        log?.entries[habitId]?.status === "missed"
+      ) {
+        // Shield absorbs one missed day during the walk
+        shieldUsedInWalk = true;
+        streak++; // Count this day as protected
+        cursor.setDate(cursor.getDate() - 1);
+        steps++;
       } else {
-        // No log, no entry for this habit, or entry isn't "done" — streak breaks
         break;
       }
     }
@@ -584,6 +664,62 @@ export function recalculateStreaks(state: LocalState, habitSlugsById: Record<str
   }
 
   return streaks;
+}
+
+/** Check if a shield was already used this calendar month */
+function isShieldUsedThisMonth(usedDate: string | null): boolean {
+  if (!usedDate) return false;
+  const now = new Date();
+  const used = new Date(usedDate);
+  return used.getFullYear() === now.getFullYear() && used.getMonth() === now.getMonth();
+}
+
+/** Evaluate and update streak shields after streak recalculation.
+ *  Earns shields for habits at 14+ day streaks. */
+export function updateStreakShields(state: LocalState): Record<string, StreakShield> {
+  const shields: Record<string, StreakShield> = { ...(state.streakShields ?? {}) };
+  const today = getToday();
+
+  for (const [slug, days] of Object.entries(state.streaks)) {
+    if (!shields[slug]) {
+      shields[slug] = { habitSlug: slug, available: false, usedDate: null, earnedDate: null };
+    }
+
+    const shield = shields[slug];
+
+    // Earn shield at 14+ days (if not already available)
+    if (days >= 14 && !shield.available) {
+      // Check if shield was used this month — don't re-earn until next month
+      if (!isShieldUsedThisMonth(shield.usedDate)) {
+        shield.available = true;
+        shield.earnedDate = today;
+      }
+    }
+
+    // Reset shield availability at start of new month if it was used
+    if (shield.usedDate && !isShieldUsedThisMonth(shield.usedDate)) {
+      // New month — if streak is still 14+, re-earn the shield
+      if (days >= 14) {
+        shield.available = true;
+        shield.earnedDate = today;
+      }
+    }
+  }
+
+  return shields;
+}
+
+/** Consume a streak shield for a habit (called when a miss is absorbed) */
+export function useStreakShield(state: LocalState, habitSlug: string): boolean {
+  const shields = state.streakShields ?? {};
+  const shield = shields[habitSlug];
+  if (!shield?.available) return false;
+  if (isShieldUsedThisMonth(shield.usedDate)) return false;
+
+  shield.available = false;
+  shield.usedDate = getToday();
+  state.streakShields = { ...shields, [habitSlug]: shield };
+  return true;
 }
 
 export function getLevelForXP(xp: number): { level: number; title: string; xpRequired: number; nextXp: number } {
@@ -724,6 +860,40 @@ export function updateGymRoutine(id: string, updates: Partial<Pick<GymRoutine, "
 export function deleteGymRoutine(id: string): void {
   const routines = loadGymRoutines().filter((r) => r.id !== id);
   saveGymRoutines(routines);
+}
+
+// ─── Exercise Library (saved exercise names for voice extraction) ───
+
+/** Load the deduplicated exercise name list */
+export function loadExerciseLibrary(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(GYM_EXERCISES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as string[];
+  } catch {
+    return [];
+  }
+}
+
+/** Save the exercise library (overwrites) */
+export function saveExerciseLibrary(exercises: string[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(GYM_EXERCISES_KEY, JSON.stringify(exercises));
+}
+
+/** Merge new exercise names into the library (case-insensitive dedup) */
+export function mergeIntoExerciseLibrary(newNames: string[]): void {
+  const existing = loadExerciseLibrary();
+  const lowerSet = new Set(existing.map((n) => n.toLowerCase()));
+  for (const name of newNames) {
+    const trimmed = name.trim();
+    if (trimmed && !lowerSet.has(trimmed.toLowerCase())) {
+      existing.push(trimmed);
+      lowerSet.add(trimmed.toLowerCase());
+    }
+  }
+  saveExerciseLibrary(existing);
 }
 
 // ─── "You Keep Showing Up" Counter ──────────────────────
@@ -915,4 +1085,72 @@ export function loadSettings(): UserSettings {
 export function saveSettings(settings: UserSettings): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+// ─── Badge Persistence ──────────────────────────────────────
+
+export interface EarnedBadgeRecord {
+  badgeId: string;
+  earnedAt: string; // ISO timestamp
+}
+
+export function loadEarnedBadges(): EarnedBadgeRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(BADGES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as EarnedBadgeRecord[];
+  } catch {
+    return [];
+  }
+}
+
+export function loadEarnedBadgeIds(): Set<string> {
+  return new Set(loadEarnedBadges().map((b) => b.badgeId));
+}
+
+export function saveEarnedBadges(badges: EarnedBadgeRecord[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(BADGES_KEY, JSON.stringify(badges));
+}
+
+/** Award a badge — idempotent (won't duplicate if already earned) */
+export function awardBadge(badgeId: string): EarnedBadgeRecord | null {
+  const existing = loadEarnedBadges();
+  if (existing.some((b) => b.badgeId === badgeId)) return null; // already earned
+  const record: EarnedBadgeRecord = {
+    badgeId,
+    earnedAt: new Date().toISOString(),
+  };
+  existing.push(record);
+  saveEarnedBadges(existing);
+  return record;
+}
+
+/** Award multiple badges at once — returns newly awarded ones */
+export function awardBadges(badgeIds: string[]): EarnedBadgeRecord[] {
+  const existing = loadEarnedBadges();
+  const earnedSet = new Set(existing.map((b) => b.badgeId));
+  const newRecords: EarnedBadgeRecord[] = [];
+  for (const id of badgeIds) {
+    if (!earnedSet.has(id)) {
+      const record: EarnedBadgeRecord = {
+        badgeId: id,
+        earnedAt: new Date().toISOString(),
+      };
+      existing.push(record);
+      newRecords.push(record);
+      earnedSet.add(id);
+    }
+  }
+  if (newRecords.length > 0) {
+    saveEarnedBadges(existing);
+  }
+  return newRecords;
+}
+
+/** Get earned date for a specific badge */
+export function getBadgeEarnedDate(badgeId: string): string | null {
+  const badges = loadEarnedBadges();
+  return badges.find((b) => b.badgeId === badgeId)?.earnedAt ?? null;
 }

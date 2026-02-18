@@ -17,6 +17,9 @@ import { ADMIN_HABIT_ID } from "@/lib/habits";
 import type { Habit, HabitStack, LogStatus } from "@/types/database";
 import { isBinaryLike } from "@/types/database";
 import { getCurrentStack, getGreeting, getGreetingEmoji, getLaterStacks, STACK_ORDER, isStackAnswered, areAllStacksAnswered } from "@/lib/schedule";
+import { evaluateNewBadges, type BadgeDef } from "@/lib/badges";
+import { loadEarnedBadgeIds, awardBadges } from "@/lib/store";
+import BadgeCelebration from "@/components/BadgeCelebration";
 
 // ─── Types ──────────────────────────────────────────────────
 type CheckinEntry = {
@@ -40,6 +43,7 @@ type SubmissionResult = {
   quote: string;
   adminDone?: number;
   adminTotal?: number;
+  newBadges?: BadgeDef[];
 };
 
 // ─── Component ──────────────────────────────────────────────
@@ -80,6 +84,7 @@ export default function CheckinPage() {
   const [badEntries, setBadEntries] = useState<Map<string, BadHabitEntry>>(new Map());
   // Submission result
   const [result, setResult] = useState<SubmissionResult | null>(null);
+  const [showBadgeCelebration, setShowBadgeCelebration] = useState(false);
   // Streaks from local store
   const [streaks, setStreaks] = useState<Record<string, number>>({});
 
@@ -454,7 +459,9 @@ export default function CheckinPage() {
   const [savedPartial, setSavedPartial] = useState(false);
 
   function handleSavePartial() {
-    const state = { ...dbState, logs: [...dbState.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } }))] };
+    // Read FRESH state from localStorage instead of potentially stale dbState
+    const freshState = loadState();
+    const state = { ...freshState, logs: [...freshState.logs.map((l) => ({ ...l, entries: { ...l.entries }, badEntries: { ...l.badEntries } }))] };
     const today = getToday();
 
     // Build partial entry records
@@ -696,6 +703,14 @@ export default function CheckinPage() {
     const hasStreakMilestone = streakUpdates.some((s) => [7, 14, 30, 60, 90].includes(s.days));
     const quoteContext = hasAnyMiss ? "after_miss" : hasStreakMilestone ? "streak_milestone" : "default";
 
+    // ─── 4. Evaluate badges ──────────────────────────────────
+    const earnedBadgeIds = loadEarnedBadgeIds();
+    const freshBadges = evaluateNewBadges({ state, earnedBadgeIds });
+    if (freshBadges.length > 0) {
+      awardBadges(freshBadges.map((b) => b.id));
+      setShowBadgeCelebration(true);
+    }
+
     setResult({
       xpEarned: xp,
       streakUpdates: streakUpdates.slice(0, 4),
@@ -703,6 +718,7 @@ export default function CheckinPage() {
       quote: getContextualQuote(quoteContext).text,
       adminDone: adminSummary.completed,
       adminTotal: adminSummary.total,
+      newBadges: freshBadges.length > 0 ? freshBadges : undefined,
     });
     setPhase("result");
   }
@@ -764,10 +780,35 @@ export default function CheckinPage() {
           </div>
         )}
 
+        {/* Badges Earned */}
+        {result.newBadges && result.newBadges.length > 0 && (
+          <div className="w-full max-w-sm rounded-xl bg-amber-950/20 border border-amber-500/20 px-4 py-3 mb-4">
+            <div className="text-xs text-amber-400 font-bold mb-2">
+              🏆 {result.newBadges.length === 1 ? "Badge Unlocked!" : `${result.newBadges.length} Badges Unlocked!`}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {result.newBadges.map((b) => (
+                <span key={b.id} className="flex items-center gap-1 text-xs text-neutral-300">
+                  <span>{b.icon}</span>
+                  <span>{b.name}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Motivational Quote */}
         <div className="max-w-xs text-neutral-400 text-sm italic leading-relaxed mb-10">
           &ldquo;{result.quote}&rdquo;
         </div>
+
+        {/* Badge Celebration Overlay */}
+        {result.newBadges && result.newBadges.length > 0 && showBadgeCelebration && (
+          <BadgeCelebration
+            badges={result.newBadges}
+            onDone={() => setShowBadgeCelebration(false)}
+          />
+        )}
 
         {/* Actions */}
         {(() => {

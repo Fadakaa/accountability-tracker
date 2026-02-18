@@ -24,6 +24,7 @@ import {
   recalculateStreaks,
   getLevelForXP,
   DEFAULT_NOTIFICATION_SLOTS,
+  mergeDayLogs,
 } from "@/lib/store";
 import type { LocalState, UserSettings, DayLog } from "@/lib/store";
 import { getResolvedHabits } from "@/lib/resolvedHabits";
@@ -157,7 +158,7 @@ export function useDB(): UseDBResult {
               const freshLocal = loadState();
               const merged = { ...remoteState };
 
-              // Merge logs: keep the richer set of logs by date
+              // Merge logs: union entries per date so partial saves aren't lost
               const logsByDate = new Map<string, typeof merged.logs[0]>();
               for (const log of remoteState.logs) logsByDate.set(log.date, log);
               for (const log of freshLocal.logs) {
@@ -166,12 +167,8 @@ export function useDB(): UseDBResult {
                   // Local has a log that Supabase doesn't — keep it
                   logsByDate.set(log.date, log);
                 } else {
-                  // Both have a log for this date — keep whichever has more entries
-                  const localEntries = Object.keys(log.entries).length + Object.keys(log.badEntries).length;
-                  const remoteEntries = Object.keys(existing.entries).length + Object.keys(existing.badEntries).length;
-                  if (localEntries > remoteEntries) {
-                    logsByDate.set(log.date, log);
-                  }
+                  // Both have a log for this date — merge entries from both sides
+                  logsByDate.set(log.date, mergeDayLogs(existing, log));
                 }
               }
               merged.logs = Array.from(logsByDate.values()).sort((a, b) => b.date.localeCompare(a.date));
